@@ -7,6 +7,8 @@ translation are actually covered.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from conftest import FAKE_TOKEN
@@ -297,3 +299,35 @@ def test_an_unreachable_websocket_reports_the_transport(run_cli):
     assert code == 1
     assert "could not open a WebSocket" in out
     assert "Traceback" not in out
+
+
+def test_a_socket_closed_between_commands_reports_the_transport_not_a_traceback(
+    run_cli, ws_env, ws_server
+):
+    # The server answers entity.list and area.list, then drops the connection;
+    # whatever the client does next has to fail as structured output.
+    ws_server.close_after = 2
+    code, out = run_cli(
+        ["entity", "update", "light.example_lamp", "--name", "Renamed Lamp"], ws_env
+    )
+    assert code == 1
+    assert "error:" in out
+    assert "WebSocket connection to Home Assistant closed" in out
+    assert "WS_CLOSED" in out
+    assert "Traceback" not in out
+
+
+def test_writing_to_a_closed_connection_is_a_structured_failure(ws_env, ws_server):
+    from ha_axi.cli import Context
+    from ha_axi.errors import ConnectionFailed
+
+    ws_server.close_after = 1
+    ctx = Context(ws_env)
+    with ctx.ws() as client:
+        assert len(client.run("entity.list")) == 3
+        # Give the client's reader time to observe the reset, so the write is
+        # the first operation to touch the dead socket.
+        time.sleep(0.1)
+        with pytest.raises(ConnectionFailed) as raised:
+            client.run("area.list")
+    assert raised.value.code == "WS_CLOSED"

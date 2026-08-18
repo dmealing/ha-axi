@@ -272,6 +272,7 @@ class FakeWsServer:
         self.areas = [json.loads(json.dumps(a)) for a in AREA_REGISTRY]
         self.devices = [json.loads(json.dumps(d)) for d in DEVICE_REGISTRY]
         self.fail_next = None
+        self.close_after = None
         self._server = None
         self._thread = None
 
@@ -296,6 +297,11 @@ class FakeWsServer:
             command = json.loads(raw)
             self.received.append(command)
             websocket.send(json.dumps(self._respond(command)))
+            if self.close_after is not None and len(self.received) >= self.close_after:
+                # Close inside the handler so the close frame follows the last
+                # reply immediately, the way a restart drops a session mid-flight.
+                websocket.close()
+                return
 
     def _respond(self, command):
         message_id, type_ = command.get("id"), command.get("type")

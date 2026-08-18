@@ -208,20 +208,22 @@ class WsClient:
 
     # ------------------------------------------------------------- transport
 
+    def _closed(self, exc: Exception) -> ConnectionFailed:
+        return ConnectionFailed(
+            f"WebSocket connection to Home Assistant closed: {exc}", code="WS_CLOSED"
+        )
+
     def _send(self, payload: dict) -> None:
-        self._socket.send(json.dumps(payload))
+        try:
+            self._socket.send(json.dumps(payload))
+        except Exception as exc:
+            raise self._closed(exc) from None
 
     def _receive(self) -> dict:
         try:
             raw = self._socket.recv(timeout=self.config.timeout)
-        except (TimeoutError, OSError) as exc:
-            raise ConnectionFailed(
-                f"WebSocket connection to Home Assistant closed: {exc}", code="WS_CLOSED"
-            ) from None
         except Exception as exc:
-            raise ConnectionFailed(
-                f"WebSocket connection to Home Assistant closed: {exc}", code="WS_CLOSED"
-            ) from None
+            raise self._closed(exc) from None
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="replace")
         try:
