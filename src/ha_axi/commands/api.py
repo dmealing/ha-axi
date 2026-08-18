@@ -1,0 +1,86 @@
+"""`ha-axi api` -- an authenticated escape hatch to any REST path."""
+
+from __future__ import annotations
+
+from ..argspec import Command, Flag, Sub
+from ..errors import UsageError
+from ._common import parse_json_flag, parse_pairs
+
+METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
+
+COMMAND = Command(
+    name="api",
+    summary="Make an authenticated request to any Home Assistant REST path",
+    usage="usage: ha-axi api [<method>] <path> [flags]",
+    default_sub="api",
+    subs=(
+        Sub(
+            name="api",
+            args=("<method-or-path>", "[path]"),
+            summary="Request a REST path",
+            flags=(
+                Flag("--field", "<key=value>", repeat=True, note="request body field"),
+                Flag("--body", "<object>", note="raw JSON body, merged over --field"),
+                Flag("--query", "<key=value>", repeat=True, note="query string parameter"),
+            ),
+        ),
+    ),
+    notes=(
+        f"methods: {', '.join(METHODS)}; GET is used when no method is given",
+        "the registries are not reachable over REST -- use `ha-axi ws` for those",
+    ),
+    examples=(
+        "ha-axi api /config",
+        "ha-axi api /states/light.example_lamp",
+        "ha-axi api POST /services/light/turn_on --field entity_id=light.example_lamp",
+        'ha-axi api POST /template --body \'{"template": "{{ now() }}"}\'',
+    ),
+)
+
+
+def run(ctx, sub: str, parsed):
+    method, path = _method_and_path(parsed.positionals)
+    body = parse_pairs(parsed.get("field", []), flag="--field")
+    body.update(parse_json_flag(parsed.get("body"), flag="--body"))
+    query = parse_pairs(parsed.get("query", []), flag="--query")
+
+    result = ctx.rest().request(
+        method,
+        path,
+        body=body if body or method in ("POST", "PUT", "PATCH") else None,
+        query={k: str(v) for k, v in query.items()} or None,
+    )
+
+    doc = {
+        "request": {"method": method, "path": path if path.startswith("/api") else f"/api{path}"}
+    }
+    if result is None or result == "":
+        doc["result"] = f"{method} succeeded with an empty response"
+    else:
+        doc["result"] = result
+    return doc
+
+
+def _method_and_path(positionals: list):
+    values = [value for value in positionals if value is not None]
+    if not values:
+        raise UsageError(
+            "a path is required",
+            help_lines=["Run `ha-axi api /config`", "Run `ha-axi api GET /states`"],
+            code="MISSING_PATH",
+        )
+    if values[0].upper() in METHODS:
+        if len(values) < 2:
+            raise UsageError(
+                f"a path is required after {values[0].upper()}",
+                help_lines=["Run `ha-axi api POST /services/light/turn_on --field entity_id=<id>`"],
+                code="MISSING_PATH",
+            )
+        return values[0].upper(), values[1]
+    if len(values) > 1:
+        raise UsageError(
+            f"unexpected argument {values[1]!r}",
+            help_lines=[f"methods must come first: `ha-axi api GET {values[0]}`"],
+            code="UNEXPECTED_ARGUMENT",
+        )
+    return "GET", values[0]

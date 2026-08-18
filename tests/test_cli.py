@@ -1,0 +1,238 @@
+"""Dispatch, global flags, help, exit codes and the home view."""
+
+from __future__ import annotations
+
+import pytest
+
+from conftest import FAKE_TOKEN
+from ha_axi import __version__
+from ha_axi.cli import COMMAND_ORDER, command_specs
+
+
+def test_no_arguments_shows_live_state_not_a_manual(run_cli, rest_env):
+    code, out = run_cli([], rest_env)
+    assert code == 0
+    assert out.startswith("bin: ")
+    assert "description: Agent ergonomic wrapper" in out
+    assert "entities: 4 in 3 domains" in out
+    assert "domains[3]{domain,entities}:" in out
+    assert "help[" in out
+
+
+def test_the_home_view_reports_the_executable_path_with_home_collapsed(run_cli, rest_env):
+    _, out = run_cli([], rest_env)
+    bin_line = out.splitlines()[0]
+    assert bin_line.startswith("bin: ")
+    assert "/home/" not in bin_line
+
+
+def test_an_unconfigured_home_view_explains_how_to_configure_and_exits_non_zero(run_cli):
+    code, out = run_cli([], {})
+    assert code == 1
+    assert "HA_URL and HA_TOKEN not set" in out
+    assert "export" not in out.lower() or "HA_URL" in out
+    assert "Run `ha-axi doctor`" in out
+
+
+def test_a_partially_configured_home_view_names_only_what_is_missing(run_cli):
+    code, out = run_cli([], {"HA_URL": "https://ha.example.com"})
+    assert code == 1
+    assert "HA_TOKEN not set" in out
+    assert "HA_URL and" not in out
+
+
+def test_root_help_lists_every_command(run_cli):
+    code, out = run_cli(["--help"], {})
+    assert code == 0
+    for name in COMMAND_ORDER:
+        assert name in out
+    assert "HA_TOKEN" in out
+    assert "there is deliberately no --token flag" in out
+
+
+@pytest.mark.parametrize("name", COMMAND_ORDER)
+def test_every_command_has_usable_help(run_cli, name):
+    code, out = run_cli([name, "--help"], {})
+    assert code == 0
+    assert out.startswith("usage: ha-axi")
+    assert "examples:" in out
+    assert command_specs()[name].summary in out
+
+
+@pytest.mark.parametrize("name", COMMAND_ORDER)
+def test_help_never_needs_configuration(run_cli, name):
+    # An agent must be able to read the reference before anything is set up.
+    code, _ = run_cli([name, "--help"], {})
+    assert code == 0
+
+
+def test_version_flag(run_cli):
+    code, out = run_cli(["--version"], {})
+    assert code == 0
+    assert __version__ in out
+
+
+def test_an_unknown_command_lists_the_real_ones(run_cli):
+    code, out = run_cli(["nope"], {})
+    assert code == 2
+    assert "unknown command: nope" in out
+    assert "state, service" in out
+
+
+def test_a_plausible_alias_gets_a_targeted_hint(run_cli):
+    code, out = run_cli(["entities"], {})
+    assert code == 2
+    assert "use `entity` instead" in out
+
+
+def test_an_unknown_subcommand_lists_the_real_ones(run_cli):
+    code, out = run_cli(["entity", "frobnicate"], {})
+    assert code == 2
+    assert "unknown subcommand `frobnicate`" in out
+    assert "list, get, update" in out
+
+
+def test_a_command_that_needs_a_subcommand_says_so(run_cli):
+    code, out = run_cli(["entity"], {})
+    assert code == 2
+    assert "`entity` needs a subcommand" in out
+
+
+def test_an_unknown_flag_is_rejected_with_the_valid_ones_inline(run_cli):
+    code, out = run_cli(["state", "list", "--stat", "closed"], {})
+    assert code == 2
+    assert "unknown flag --stat for `state list`" in out
+    assert "--domain, --state, --search, --limit, --fields" in out
+    assert "--help always allowed" in out
+
+
+def test_a_renamed_flag_points_at_its_replacement(run_cli):
+    code, out = run_cli(["entity", "list", "--room", "x"], {})
+    assert code == 2
+    assert "use --area instead" in out
+
+
+def test_flags_are_validated_per_subcommand(run_cli):
+    # --search exists on `entity list` but not on `entity update`.
+    assert run_cli(["entity", "list", "--search", "x"], {})[0] != 2
+    code, out = run_cli(["entity", "update", "light.example_lamp", "--search", "x"], {})
+    assert code == 2
+    assert "unknown flag --search for `entity update`" in out
+
+
+def test_a_missing_positional_is_a_usage_error(run_cli):
+    code, out = run_cli(["entity", "get"], {})
+    assert code == 2
+    assert "needs <entity_id>" in out
+
+
+def test_an_extra_positional_is_rejected_rather_than_ignored(run_cli):
+    code, out = run_cli(["entity", "get", "light.example_lamp", "extra"], {})
+    assert code == 2
+    assert "unexpected argument 'extra'" in out
+
+
+def test_a_flag_without_its_value_is_a_usage_error(run_cli):
+    code, out = run_cli(["state", "list", "--domain"], {})
+    assert code == 2
+    assert "--domain needs a value" in out
+
+
+def test_flags_accept_the_equals_form(run_cli, rest_env):
+    code, out = run_cli(["state", "list", "--domain=light"], rest_env)
+    assert code == 0
+    assert "count: 2 of 2 matched (4 total)" in out
+
+
+def test_repeatable_flags_accumulate(run_cli, rest_env):
+    code, out = run_cli(["state", "list", "--domain", "light", "--domain", "sensor"], rest_env)
+    assert code == 0
+    assert "count: 3 of 3 matched (4 total)" in out
+
+
+def test_human_mode_renders_a_table(run_cli, rest_env):
+    code, out = run_cli(["--human", "state", "list"], rest_env)
+    assert code == 0
+    assert "-----" in out
+
+
+def test_human_mode_is_accepted_after_the_subcommand_too(run_cli, rest_env):
+    code, out = run_cli(["state", "list", "--human"], rest_env)
+    assert code == 0
+    assert "-----" in out
+
+
+def test_json_mode_emits_parseable_json(run_cli, rest_env):
+    import json
+
+    code, out = run_cli(["--json", "state", "list"], rest_env)
+    assert code == 0
+    assert len(json.loads(out)["states"]) == 4
+
+
+def test_a_global_flag_is_not_stolen_from_a_flag_value(run_cli, rest_env, rest_server):
+    rest_server.state["template"] = "ok"
+    code, _ = run_cli(["template", "render", "--template", "--human"], rest_env)
+    assert code == 0
+    posted = [r for r in rest_server.requests if r["path"] == "/api/template"]
+    assert posted[0]["body"] == {"template": "--human"}
+
+
+def test_timeout_must_be_a_positive_number(run_cli, rest_env):
+    assert run_cli(["--timeout", "abc", "state", "list"], rest_env)[0] == 2
+    assert run_cli(["--timeout", "0", "state", "list"], rest_env)[0] == 2
+
+
+def test_doctor_fails_the_leg_that_cannot_connect(run_cli, rest_env):
+    # The REST double answers; there is no WebSocket server on that authority,
+    # so doctor must report per-transport rather than pass or fail wholesale.
+    code, out = run_cli(["doctor"], rest_env)
+    assert code == 1
+    assert "environment,ok" in out
+    assert "rest,ok" in out
+    assert "websocket,fail" in out
+    assert "version: 2026.1.0" in out
+
+
+def test_doctor_reports_a_missing_environment_and_exits_non_zero(run_cli):
+    code, out = run_cli(["doctor"], {})
+    assert code == 1
+    assert "environment,fail,HA_URL and HA_TOKEN not set" in out
+    assert "healthy: false" in out
+
+
+def test_doctor_is_healthy_when_both_transports_answer(rest_server, ws_server, capsys):
+    """The doubles listen on separate ports, so bind each transport explicitly."""
+    from ha_axi import output
+    from ha_axi.cli import Context
+    from ha_axi.commands import doctor
+    from ha_axi.config import load
+    from ha_axi.rest import RestClient
+    from ha_axi.ws import WsClient
+
+    rest_config = load({"HA_URL": rest_server.url, "HA_TOKEN": FAKE_TOKEN})
+    ws_config = load({"HA_URL": f"http://127.0.0.1:{ws_server.port}", "HA_TOKEN": FAKE_TOKEN})
+
+    class BothTransports(Context):
+        def rest(self):
+            return RestClient(rest_config)
+
+        def ws(self):
+            return WsClient(ws_config)
+
+    ctx = BothTransports({"HA_URL": rest_server.url, "HA_TOKEN": FAKE_TOKEN})
+    doc = doctor.run(ctx, "doctor", None)
+    output.write(doc)
+    out = capsys.readouterr().out
+
+    assert doc["healthy"] is True
+    assert "__exit_code__" not in doc
+    assert "rest,ok" in out
+    assert 'websocket,ok,"authenticated, 3 registry entries in 2 areas"' in out
+
+
+def test_no_command_writes_progress_noise_to_stdout(run_cli, rest_env, capsys):
+    code, out = run_cli(["state", "list"], rest_env)
+    assert code == 0
+    for line in out.splitlines():
+        assert not line.lower().startswith(("fetching", "loading", "connecting"))

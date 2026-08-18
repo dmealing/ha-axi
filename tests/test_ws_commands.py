@@ -1,0 +1,281 @@
+"""Registry commands, exercised against a real local WebSocket server.
+
+These run the full protocol: the auth handshake, id correlation, and the
+command/result exchange. Nothing is mocked, so the client's framing and error
+translation are actually covered.
+"""
+
+from __future__ import annotations
+
+from conftest import FAKE_TOKEN
+
+
+def test_entity_list_resolves_area_names_in_the_default_view(run_cli, ws_env):
+    code, out = run_cli(["entity", "list"], ws_env)
+    assert code == 0
+    assert "entities[3]{entity_id,name,area}:" in out
+    assert "light.example_lamp,Example Lamp,Example Room" in out
+
+
+def test_entity_list_falls_back_to_the_original_name(run_cli, ws_env):
+    _, out = run_cli(["entity", "list"], ws_env)
+    assert "light.example_ceiling,Example Ceiling," in out
+
+
+def test_entity_inherits_its_device_area_when_it_has_none_of_its_own(run_cli, ws_env):
+    code, out = run_cli(["entity", "list", "--fields", "entity_id,area,area_id"], ws_env)
+    assert code == 0
+    # light.example_ceiling has no area_id but its device sits in Example Hall.
+    assert "light.example_ceiling,Example Hall,example_hall" in out
+
+
+def test_entity_list_filters_by_area_name_or_id(run_cli, ws_env):
+    _, by_name = run_cli(["entity", "list", "--area", "Example Room"], ws_env)
+    _, by_id = run_cli(["entity", "list", "--area", "example_room"], ws_env)
+    assert "light.example_lamp" in by_name and "light.example_ceiling" not in by_name
+    assert by_name.splitlines()[1:] == by_id.splitlines()[1:]
+
+
+def test_entity_list_finds_entities_with_no_area(run_cli, ws_env):
+    code, out = run_cli(["entity", "list", "--area", "none"], ws_env)
+    assert code == 0
+    assert "sensor.example_temperature" in out
+    assert "light.example_lamp" not in out
+
+
+def test_entity_list_rejects_an_unknown_area_with_a_way_forward(run_cli, ws_env):
+    code, out = run_cli(["entity", "list", "--area", "Nowhere"], ws_env)
+    assert code == 1
+    assert "no area with id or name 'Nowhere'" in out
+    assert "ha-axi area list" in out
+
+
+def test_entity_list_filters_by_domain_and_platform_and_search(run_cli, ws_env):
+    _, out = run_cli(["entity", "list", "--domain", "sensor"], ws_env)
+    assert "sensor.example_temperature" in out and "light.example_lamp" not in out
+    _, out = run_cli(["entity", "list", "--platform", "demo"], ws_env)
+    assert "count: 3 of 3 matched (3 total)" in out
+    _, out = run_cli(["entity", "list", "--search", "lamp"], ws_env)
+    assert "light.example_lamp" in out and "sensor.example" not in out
+
+
+def test_entity_list_states_the_zero_explicitly(run_cli, ws_env):
+    code, out = run_cli(["entity", "list", "--domain", "vacuum"], ws_env)
+    assert code == 0
+    assert "entities: 0 registry entries found in domain vacuum" in out
+
+
+def test_entity_get_shows_where_the_area_came_from(run_cli, ws_env):
+    code, out = run_cli(["entity", "get", "light.example_lamp"], ws_env)
+    assert code == 0
+    assert "area_source: entity" in out
+    code, out = run_cli(["entity", "get", "light.example_ceiling"], ws_env)
+    assert "area_source: device" in out
+
+
+def test_entity_get_on_a_missing_entry_suggests_a_search(run_cli, ws_env):
+    code, out = run_cli(["entity", "get", "light.absent"], ws_env)
+    assert code == 1
+    assert "no registry entry for light.absent" in out
+    assert "--search absent" in out
+
+
+def test_entity_update_sets_the_name_and_the_area(run_cli, ws_env, ws_server):
+    code, out = run_cli(
+        [
+            "entity",
+            "update",
+            "light.example_ceiling",
+            "--name",
+            "Reading Lamp",
+            "--area",
+            "Example Room",
+        ],
+        ws_env,
+    )
+    assert code == 0
+    assert "updated[2]: area_id,name" in out
+    updates = [c for c in ws_server.received if c["type"] == "config/entity_registry/update"]
+    assert updates[0]["name"] == "Reading Lamp"
+    assert updates[0]["area_id"] == "example_room"
+    assert ws_server.entities[1]["name"] == "Reading Lamp"
+
+
+def test_entity_update_is_idempotent(run_cli, ws_env, ws_server):
+    code, out = run_cli(
+        ["entity", "update", "light.example_lamp", "--name", "Example Lamp"], ws_env
+    )
+    assert code == 0
+    assert "no change made" in out
+    assert [c for c in ws_server.received if c["type"] == "config/entity_registry/update"] == []
+
+
+def test_entity_update_can_clear_the_name_and_the_area(run_cli, ws_env, ws_server):
+    code, _ = run_cli(
+        ["entity", "update", "light.example_lamp", "--clear-name", "--clear-area"], ws_env
+    )
+    assert code == 0
+    update = next(c for c in ws_server.received if c["type"] == "config/entity_registry/update")
+    assert update["name"] is None and update["area_id"] is None
+
+
+def test_entity_update_needs_something_to_change(run_cli, ws_env):
+    code, out = run_cli(["entity", "update", "light.example_lamp"], ws_env)
+    assert code == 2
+    assert "nothing to update" in out
+
+
+def test_entity_update_rejects_conflicting_area_flags(run_cli, ws_env):
+    code, out = run_cli(
+        ["entity", "update", "light.example_lamp", "--area", "example_room", "--clear-area"], ws_env
+    )
+    assert code == 2
+    assert "mutually exclusive" in out
+
+
+def test_area_list_counts_entities_including_device_inheritance(run_cli, ws_env):
+    code, out = run_cli(["area", "list"], ws_env)
+    assert code == 0
+    assert "areas[2]{area_id,name,entities,devices,floor_id}:" in out
+    assert "example_hall,Example Hall,1,1,ground" in out
+    assert "example_room,Example Room,1,1," in out
+
+
+def test_area_get_accepts_a_name_as_well_as_an_id(run_cli, ws_env):
+    _, by_id = run_cli(["area", "get", "example_room"], ws_env)
+    _, by_name = run_cli(["area", "get", "Example Room"], ws_env)
+    assert by_id == by_name
+    assert "name: Example Room" in by_id
+
+
+def test_area_create_makes_a_new_area(run_cli, ws_env, ws_server):
+    code, out = run_cli(["area", "create", "--name", "Example Study"], ws_env)
+    assert code == 0
+    assert "area_id: example_study" in out
+    assert any(a["name"] == "Example Study" for a in ws_server.areas)
+
+
+def test_area_create_is_idempotent(run_cli, ws_env, ws_server):
+    code, out = run_cli(["area", "create", "--name", "Example Room"], ws_env)
+    assert code == 0
+    assert "already exists" in out
+    assert [c for c in ws_server.received if c["type"] == "config/area_registry/create"] == []
+
+
+def test_area_create_requires_a_name(run_cli, ws_env):
+    code, out = run_cli(["area", "create"], ws_env)
+    assert code == 2
+    assert "--name is required" in out
+
+
+def test_area_update_renames(run_cli, ws_env, ws_server):
+    code, out = run_cli(["area", "update", "Example Room", "--name", "Example Study"], ws_env)
+    assert code == 0
+    assert "updated[1]: name" in out
+    assert ws_server.areas[0]["name"] == "Example Study"
+
+
+def test_area_update_is_idempotent(run_cli, ws_env, ws_server):
+    code, out = run_cli(["area", "update", "example_room", "--name", "Example Room"], ws_env)
+    assert code == 0
+    assert "no change made" in out
+    assert [c for c in ws_server.received if c["type"] == "config/area_registry/update"] == []
+
+
+def test_area_update_needs_something_to_change(run_cli, ws_env):
+    code, out = run_cli(["area", "update", "example_room"], ws_env)
+    assert code == 2
+    assert "nothing to update" in out
+
+
+def test_device_list_shows_areas_and_entity_counts(run_cli, ws_env):
+    code, out = run_cli(["device", "list"], ws_env)
+    assert code == 0
+    assert "devices[2]{device_id,name,area}:" in out
+    assert "device_two,Renamed Device,Example Hall" in out
+
+
+def test_device_list_works_without_the_subcommand_name(run_cli, ws_env):
+    code, out = run_cli(["device"], ws_env)
+    assert code == 0
+    assert "devices[2]" in out
+
+
+def test_ws_list_needs_no_connection(run_cli):
+    code, out = run_cli(["ws", "--list"], {})
+    assert code == 0
+    assert "entity.update,config/entity_registry/update" in out
+
+
+def test_ws_sends_a_declared_command(run_cli, ws_env, ws_server):
+    code, out = run_cli(["ws", "area.list"], ws_env)
+    assert code == 0
+    assert "type: config/area_registry/list" in out
+    assert ws_server.received[0]["type"] == "config/area_registry/list"
+
+
+def test_ws_passes_parameters_through(run_cli, ws_env, ws_server):
+    code, _ = run_cli(
+        ["ws", "area.update", "--param", "area_id=example_room", "--param", "name=Example Study"],
+        ws_env,
+    )
+    assert code == 0
+    assert ws_server.received[0]["name"] == "Example Study"
+
+
+def test_ws_requires_declared_parameters_up_front(run_cli, ws_env, ws_server):
+    code, out = run_cli(["ws", "area.update"], ws_env)
+    assert code == 2
+    assert "area.update needs area_id" in out
+    assert ws_server.received == []
+
+
+def test_ws_rejects_an_undeclared_name_and_lists_what_exists(run_cli, ws_env):
+    code, out = run_cli(["ws", "nope"], ws_env)
+    assert code == 2
+    assert "unknown websocket command: nope" in out
+    assert "entity.list" in out
+
+
+def test_ws_points_a_raw_type_at_the_raw_flag(run_cli, ws_env):
+    code, out = run_cli(["ws", "config/floor_registry/list"], ws_env)
+    assert code == 2
+    assert "--raw config/floor_registry/list" in out
+
+
+def test_ws_raw_sends_an_undeclared_type(run_cli, ws_env, ws_server):
+    code, _out = run_cli(["ws", "--raw", "config/floor_registry/list"], ws_env)
+    assert code == 0
+    assert ws_server.received[0]["type"] == "config/floor_registry/list"
+
+
+def test_a_command_error_is_translated_not_leaked(run_cli, ws_env, ws_server):
+    ws_server.fail_next = {"code": "invalid_format", "message": "expected str for name"}
+    code, out = run_cli(["area", "list"], ws_env)
+    assert code == 1
+    assert "rejected the arguments" in out
+    assert "Traceback" not in out
+
+
+def test_an_unauthorized_command_names_the_permission_problem(run_cli, ws_env, ws_server):
+    ws_server.fail_next = {"code": "unauthorized", "message": "nope"}
+    code, out = run_cli(["area", "list"], ws_env)
+    assert code == 1
+    assert "not permitted" in out
+    assert "administrator" in out
+
+
+def test_a_rejected_token_fails_the_handshake_cleanly(run_cli, ws_server):
+    env = {"HA_URL": f"http://127.0.0.1:{ws_server.port}", "HA_TOKEN": "wrong-token-value"}
+    code, out = run_cli(["entity", "list"], env)
+    assert code == 1
+    assert "rejected the access token" in out
+    assert "wrong-token-value" not in out
+
+
+def test_an_unreachable_websocket_reports_the_transport(run_cli):
+    env = {"HA_URL": "http://127.0.0.1:1", "HA_TOKEN": FAKE_TOKEN}
+    code, out = run_cli(["entity", "list"], env)
+    assert code == 1
+    assert "could not open a WebSocket" in out
+    assert "Traceback" not in out
