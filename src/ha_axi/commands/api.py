@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ._common import parse_json_flag, parse_pairs
@@ -48,7 +50,7 @@ def run(ctx, sub: str, parsed):
         method,
         path,
         body=body if body or method in ("POST", "PUT", "PATCH") else None,
-        query={k: str(v) for k, v in query.items()} or None,
+        query={k: _query_value(v) for k, v in query.items()} or None,
     )
 
     doc = {
@@ -59,6 +61,17 @@ def run(ctx, sub: str, parsed):
     else:
         doc["result"] = result
     return doc
+
+
+def _query_value(value) -> str:
+    """Render a parsed ``--query`` value as it should appear on the wire.
+
+    ``parse_pairs`` reads values as JSON when they parse, so a boolean or a
+    null has to go back to its JSON spelling rather than Python's.
+    """
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, separators=(",", ":"))
 
 
 def _method_and_path(positionals: list):

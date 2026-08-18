@@ -19,6 +19,7 @@ from ._common import (
     parse_limit,
     project,
     registry_name,
+    reject_conflicting_flags,
     resolve_area,
     select_fields,
 )
@@ -219,6 +220,14 @@ def _get(ctx, parsed):
 
 def _update(ctx, parsed):
     entity_id = parsed.positionals[0]
+    reject_conflicting_flags(
+        parsed,
+        ("--name", "--clear-name"),
+        ("--icon", "--clear-icon"),
+        ("--area", "--clear-area"),
+        invocation=f"ha-axi entity update {entity_id}",
+    )
+
     changes: dict = {}
     if parsed.get("clear_name"):
         changes["name"] = None
@@ -233,12 +242,6 @@ def _update(ctx, parsed):
 
     clear_area = parsed.get("clear_area")
     area_arg = parsed.get("area")
-    if clear_area and area_arg:
-        raise UsageError(
-            "--area and --clear-area are mutually exclusive",
-            help_lines=[f"Run `ha-axi entity update {entity_id} --clear-area`"],
-            code="CONFLICTING_FLAGS",
-        )
 
     if not changes and not clear_area and area_arg is None:
         raise UsageError(

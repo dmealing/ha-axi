@@ -7,6 +7,8 @@ translation are actually covered.
 
 from __future__ import annotations
 
+import pytest
+
 from conftest import FAKE_TOKEN
 
 
@@ -131,6 +133,22 @@ def test_entity_update_rejects_conflicting_area_flags(run_cli, ws_env):
     )
     assert code == 2
     assert "mutually exclusive" in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["entity", "update", "light.example_lamp", "--name", "Reading Lamp", "--clear-name"],
+        ["entity", "update", "light.example_lamp", "--icon", "mdi:lamp", "--clear-icon"],
+        ["area", "update", "example_room", "--icon", "mdi:sofa", "--clear-icon"],
+        ["area", "update", "example_room", "--floor", "ground", "--clear-floor"],
+    ],
+)
+def test_update_rejects_a_set_flag_paired_with_its_clear(run_cli, ws_env, argv):
+    code, out = run_cli(argv, ws_env)
+    assert code == 2
+    assert "mutually exclusive" in out
+    assert "CONFLICTING_FLAGS" in out
 
 
 def test_area_list_counts_entities_including_device_inheritance(run_cli, ws_env):

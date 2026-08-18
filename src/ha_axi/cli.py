@@ -192,6 +192,10 @@ def _mode(globals_: dict) -> str:
     return MODE_TOON
 
 
+def _wants_version(globals_: dict) -> bool:
+    return bool(globals_.get("version") or globals_.get("v") or globals_.get("V"))
+
+
 def _unknown_command(name: str):
     suggestion = _ALIASES.get(name.lower())
     if suggestion:
@@ -255,7 +259,7 @@ def main(argv: list | None = None, *, environ=None) -> int:
     mode = _mode(globals_)
 
     try:
-        if globals_.get("version") or globals_.get("v") or globals_.get("V"):
+        if _wants_version(globals_):
             output.write({"ha-axi": __version__}, mode)
             return EXIT_OK
 
@@ -291,6 +295,9 @@ def main(argv: list | None = None, *, environ=None) -> int:
             module = _MODULES[command.name]
             globals_.update(parsed.globals)
             mode = _mode(globals_)
+            if _wants_version(globals_):
+                output.write({"ha-axi": __version__}, mode)
+                return EXIT_OK
 
         if globals_.get("debug"):
             environ = dict(environ)

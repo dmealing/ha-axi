@@ -6,6 +6,7 @@ template rendering. The registries are not reachable here -- see :mod:`ha_axi.ws
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import ssl
@@ -65,6 +66,15 @@ class RestClient:
                 f"timed out after {self.config.timeout:g}s waiting for Home Assistant",
                 help_lines=["Raise the limit with `ha-axi --timeout 60 <command>`"],
                 code="TIMEOUT",
+            ) from None
+        except (http.client.HTTPException, OSError) as exc:
+            raise ConnectionFailed(
+                f"the connection to Home Assistant dropped mid-response: {exc}",
+                help_lines=[
+                    "Retry the command; a dropped connection is often a one-off",
+                    "Run `ha-axi doctor` to test the connection if it keeps happening",
+                ],
+                code="CONNECTION_DROPPED",
             ) from None
 
         if _JSON in content_type:

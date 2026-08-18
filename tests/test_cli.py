@@ -66,8 +66,11 @@ def test_help_never_needs_configuration(run_cli, name):
     assert code == 0
 
 
-def test_version_flag(run_cli):
-    code, out = run_cli(["--version"], {})
+@pytest.mark.parametrize(
+    "argv", [["--version"], ["-v"], ["device", "--version"], ["state", "list", "-v"]]
+)
+def test_version_flag_works_in_any_position(run_cli, argv):
+    code, out = run_cli(argv, {})
     assert code == 0
     assert __version__ in out
 

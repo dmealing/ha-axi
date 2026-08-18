@@ -5,7 +5,13 @@ from __future__ import annotations
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ..output import HelpBlock
-from ._common import device_area_map, effective_area_id, plural, resolve_area
+from ._common import (
+    device_area_map,
+    effective_area_id,
+    plural,
+    reject_conflicting_flags,
+    resolve_area,
+)
 
 COMMAND = Command(
     name="area",
@@ -190,6 +196,13 @@ def _create(ctx, parsed):
 
 def _update(ctx, parsed):
     needle = parsed.positionals[0]
+    reject_conflicting_flags(
+        parsed,
+        ("--icon", "--clear-icon"),
+        ("--floor", "--clear-floor"),
+        invocation=f"ha-axi area update {needle}",
+    )
+
     changes: dict = {}
     if parsed.get("name") is not None:
         changes["name"] = parsed.get("name")

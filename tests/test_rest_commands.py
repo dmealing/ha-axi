@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import socket
+import threading
+
 from conftest import FAKE_TOKEN
 
 
@@ -240,6 +243,29 @@ def test_api_requires_a_path(run_cli, rest_env):
     assert "a path is required after POST" in out
 
 
+def test_api_query_values_keep_their_json_spelling(run_cli, rest_env, rest_server):
+    code, _ = run_cli(
+        [
+            "api",
+            "/config",
+            "--query",
+            "return_config=true",
+            "--query",
+            "absent=null",
+            "--query",
+            "level=10",
+        ],
+        rest_env,
+    )
+    assert code == 0
+    query = rest_server.requests[-1]["query"]
+    assert "return_config=true" in query
+    assert "absent=null" in query
+    assert "level=10" in query
+    assert "True" not in query
+    assert "None" not in query
+
+
 def test_a_rejected_token_produces_an_actionable_error(run_cli, rest_server):
     code, out = run_cli(
         ["state", "list"], {"HA_URL": rest_server.url, "HA_TOKEN": "wrong-token-value"}
@@ -254,4 +280,31 @@ def test_an_unreachable_instance_reports_the_transport_not_a_traceback(run_cli):
     code, out = run_cli(["state", "list"], env)
     assert code == 1
     assert "could not reach Home Assistant" in out
+    assert "Traceback" not in out
+
+
+def test_a_response_cut_off_mid_body_reports_the_transport_not_a_traceback(run_cli):
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def serve_a_truncated_body():
+        conn, _ = listener.accept()
+        conn.recv(65536)
+        body = b'{"message": "API run'
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body) + 64}\r\n\r\n".encode()
+            + body
+        )
+        conn.close()
+        listener.close()
+
+    threading.Thread(target=serve_a_truncated_body, daemon=True).start()
+    env = {"HA_URL": f"http://127.0.0.1:{listener.getsockname()[1]}", "HA_TOKEN": FAKE_TOKEN}
+    code, out = run_cli(["state", "list"], env)
+    assert code == 1
+    assert "dropped mid-response" in out
+    assert "CONNECTION_DROPPED" in out
     assert "Traceback" not in out

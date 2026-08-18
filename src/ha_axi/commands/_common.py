@@ -51,6 +51,17 @@ def effective_area_id(entry: dict, device_areas: dict) -> str:
     return entry.get("area_id") or device_areas.get(entry.get("device_id")) or ""
 
 
+def reject_conflicting_flags(parsed, *pairs: tuple, invocation: str) -> None:
+    """Reject each set flag used together with its ``--clear`` counterpart."""
+    for set_flag, clear_flag in pairs:
+        if parsed.get(clear_flag) and parsed.get(set_flag) is not None:
+            raise UsageError(
+                f"{set_flag} and {clear_flag} are mutually exclusive",
+                help_lines=[f"Run `{invocation} {clear_flag}`"],
+                code="CONFLICTING_FLAGS",
+            )
+
+
 def parse_limit(raw, *, default: int) -> int:
     if raw is None:
         return default
