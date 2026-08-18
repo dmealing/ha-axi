@@ -66,7 +66,7 @@ bypass the hook.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~230 tests, about 1.5s
+pytest                                   # ~240 tests, about 1.5s
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
