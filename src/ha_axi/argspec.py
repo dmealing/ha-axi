@@ -115,10 +115,10 @@ class Parsed:
     globals: dict = field(default_factory=dict)
 
     def get(self, name: str, default=None):
-        return self.flags.get(name.lstrip("-").replace("-", "_"), default)
+        return self.flags.get(_key(name), default)
 
     def has(self, name: str) -> bool:
-        return name.lstrip("-").replace("-", "_") in self.flags
+        return _key(name) in self.flags
 
 
 def _key(flag_name: str) -> str:
@@ -162,6 +162,12 @@ def parse(sub: Sub, argv: list, *, command: Command) -> Parsed:
                 elif index < len(argv):
                     result.globals["timeout"] = argv[index]
                     index += 1
+                else:
+                    raise UsageError(
+                        "--timeout needs a value",
+                        help_lines=["Run `ha-axi --timeout 60 <command>`"],
+                        code="BAD_TIMEOUT",
+                    )
             else:
                 result.globals[name.lstrip("-")] = True
             continue

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import Config
-from .errors import ApiError, AuthFailed, ConnectionFailed, NotFound
+from .errors import ApiError, AuthFailed, ConnectionFailed, NotFound, UsageError
 from .output import debug
 
 #: Cap on a single frame. Registry payloads on large installations comfortably
@@ -166,7 +166,13 @@ class WsClient:
                 help_lines=["Confirm HA_URL points at the Home Assistant root, not at /api"],
                 code="WS_HANDSHAKE",
             ) from None
-        self._authenticate()
+        try:
+            self._authenticate()
+        except Exception:
+            # __exit__ never runs when __enter__ raises, so the socket would
+            # stay open for the life of the process.
+            self.close()
+            raise
 
     def close(self) -> None:
         if self._socket is not None:
@@ -267,9 +273,14 @@ class WsClient:
         """Send a command declared in :data:`REGISTRY` by its friendly name."""
         command = REGISTRY.get(name)
         if command is None:
-            raise NotFound(
+            # Exit 2: the command table is static, so this is a malformed
+            # invocation, matching how `ha-axi ws <name>` rejects the same thing.
+            raise UsageError(
                 f"unknown websocket command: {name}",
-                help_lines=["Run `ha-axi ws --list` to see the declared commands"],
+                help_lines=[
+                    f"declared commands: {', '.join(sorted(REGISTRY))}",
+                    "Run `ha-axi ws --list` to see each command's parameters",
+                ],
                 code="NO_SUCH_COMMAND",
             )
         return self.send_command(command.type, params)

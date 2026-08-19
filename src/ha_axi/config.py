@@ -9,10 +9,12 @@ token in a file leaks into commits. The environment is the only channel.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
 from .errors import ConfigError
+from .output import register_secret
 
 #: Primary variable names, with the ``hass-cli`` names accepted as fallbacks so
 #: an existing Home Assistant shell environment works unchanged.
@@ -26,6 +28,12 @@ _SETUP_HELP = [
     "Set HA_TOKEN to a long-lived access token from your Home Assistant profile page, under Security",
     "Run `ha-axi doctor` to verify the connection once both are set",
 ]
+
+
+#: Anything a token must not contain. A header value cannot carry a line break,
+#: and http.client raises a ValueError embedding the whole `Bearer ...` header
+#: when it finds one -- which is a credential in a traceback.
+_ILLEGAL_TOKEN = re.compile(r"[\s\x00-\x1f\x7f]")
 
 
 @dataclass(frozen=True)
@@ -59,11 +67,27 @@ def _first_env(names: tuple, environ) -> tuple:
     return None, None
 
 
+def split_userinfo(netloc: str) -> tuple:
+    """Separate any ``user:password@`` prefix from a network location.
+
+    Credentials in a URL are never sent by this tool -- Home Assistant
+    authenticates with the bearer token -- but they must not survive into the
+    base URL either, because the no-argument home view prints it and that view
+    is what `setup hooks` runs into every agent session.
+    """
+    if "@" not in netloc:
+        return "", netloc
+    userinfo, _, host = netloc.rpartition("@")
+    return userinfo, host
+
+
 def normalize_base_url(raw: str) -> str:
     """Accept a bare host, add a scheme if missing, and drop any trailing path noise."""
     value = raw.strip().rstrip("/")
     if "://" not in value:
-        value = f"http://{value}"
+        # Default to TLS: a bare host that silently became http:// would send
+        # the access token in cleartext.
+        value = f"https://{value}"
     parts = urlsplit(value)
     if not parts.netloc:
         raise ConfigError(
@@ -81,7 +105,14 @@ def normalize_base_url(raw: str) -> str:
     # A base URL that already points at the API root is a common paste mistake.
     if path.endswith("/api"):
         path = path[: -len("/api")]
-    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    userinfo, host = split_userinfo(parts.netloc)
+    if userinfo:
+        # Register before returning: from here on the value can only be
+        # printed through the redacting output boundary.
+        register_secret(userinfo, min_length=4)
+        _, _, password = userinfo.partition(":")
+        register_secret(password, min_length=4)
+    return urlunsplit((parts.scheme, host, path, "", ""))
 
 
 def load(environ=None, *, timeout: float | None = None) -> Config:
@@ -104,11 +135,42 @@ def load(environ=None, *, timeout: float | None = None) -> Config:
             code="NOT_CONFIGURED",
         )
 
+    if _ILLEGAL_TOKEN.search(token):
+        raise ConfigError(
+            f"{TOKEN_VARS[0]} contains whitespace or a control character",
+            help_lines=[
+                "A long-lived access token is a single unbroken string; check for a line break",
+                "If it was read from a file, strip the trailing newline, e.g. HA_TOKEN=$(tr -d '\\n' < token.txt)",
+            ],
+            code="BAD_TOKEN",
+        )
+
+    # Registered at the moment it is read, so no later code path can print it.
+    register_secret(token)
     return Config(
         base_url=normalize_base_url(raw_url),
         token=token,
         timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
     )
+
+
+def missing_env_vars(environ=None) -> list:
+    """The primary variable names that are absent, in the order to report them."""
+    described = describe_environment(environ)
+    missing = []
+    if not described["url_set"]:
+        missing.append(URL_VARS[0])
+    if not described["token_set"]:
+        missing.append(TOKEN_VARS[0])
+    return missing
+
+
+def setup_help(*, include_doctor: bool = True) -> list:
+    """The guidance printed wherever configuration is found to be absent."""
+    lines = list(_SETUP_HELP[:2])
+    if include_doctor:
+        lines.append(_SETUP_HELP[2])
+    return lines
 
 
 def describe_environment(environ=None) -> dict:

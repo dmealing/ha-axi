@@ -22,11 +22,52 @@ from .output import debug
 _JSON = "application/json"
 
 
+def api_path(path: str) -> str:
+    """Normalize a REST path the single way every caller must agree on.
+
+    Shared so a command can report exactly the path it requested; reimplementing
+    the rule at the reporting site is how `api config` came to say `/apiconfig`
+    while requesting `/api/config`.
+    """
+    path = path if path.startswith("/") else f"/{path}"
+    if path != "/api" and not path.startswith("/api/"):
+        path = f"/api{path}"
+    return path
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse a redirect that would carry the Authorization header elsewhere.
+
+    urllib copies every header except content-length/type onto the redirected
+    request and permits scheme changes, so an instance behind an auth proxy or
+    a captive portal answering `302 Location: http://other.host/login` would be
+    handed the long-lived token in cleartext. Home Assistant's API does not
+    redirect, so only a same-origin redirect (a proxy normalising a path) is
+    worth following.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        origin = urllib.parse.urlsplit(req.full_url)
+        target = urllib.parse.urlsplit(newurl)
+        if (origin.scheme, origin.netloc) != (target.scheme, target.netloc):
+            raise ConnectionFailed(
+                "refusing to follow a redirect to "
+                f"{target.scheme}://{target.netloc}: it would send the access token there",
+                help_lines=[
+                    "Point HA_URL directly at Home Assistant rather than at a proxy that redirects",
+                    "Run `ha-axi doctor` to see which transport is failing",
+                ],
+                code="REDIRECT_REFUSED",
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class RestClient:
     """A thin, synchronous wrapper over the Home Assistant REST endpoints."""
 
     def __init__(self, config: Config) -> None:
         self.config = config
+        self._opener = urllib.request.build_opener(_SameOriginRedirectHandler)
 
     # ------------------------------------------------------------- transport
 
@@ -54,7 +95,7 @@ class RestClient:
         debug(f"{method} {url}")
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
+            with self._opener.open(request, timeout=self.config.timeout) as response:
                 payload = response.read().decode("utf-8", errors="replace")
                 content_type = response.headers.get("Content-Type", "")
         except urllib.error.HTTPError as exc:
@@ -85,9 +126,7 @@ class RestClient:
         return payload
 
     def _url(self, path: str, query: dict | None) -> str:
-        path = path if path.startswith("/") else f"/{path}"
-        if path != "/api" and not path.startswith("/api/"):
-            path = f"/api{path}"
+        path = api_path(path)
         url = f"{self.config.base_url}{path}"
         if query:
             pairs = [(k, v) for k, v in query.items() if v is not None]

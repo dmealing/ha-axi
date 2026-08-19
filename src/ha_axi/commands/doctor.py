@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..argspec import Command, Sub
-from ..config import TOKEN_VARS, URL_VARS, describe_environment
+from ..config import describe_environment, missing_env_vars, setup_help
 from ..errors import AxiError
 from ..output import HelpBlock
 from ._common import plural
@@ -24,11 +24,7 @@ def run(ctx, sub: str, parsed):
     checks = []
     healthy = True
 
-    missing = []
-    if not env["url_set"]:
-        missing.append(URL_VARS[0])
-    if not env["token_set"]:
-        missing.append(TOKEN_VARS[0])
+    missing = missing_env_vars(ctx.environ)
     if missing:
         checks.append(
             {
@@ -92,12 +88,6 @@ def _document(checks, *, healthy: bool, version: str = ""):
     if version:
         doc["version"] = version
     if not healthy:
-        doc["help"] = HelpBlock(
-            [
-                f"Set {URL_VARS[0]} to your Home Assistant base URL, e.g. https://homeassistant.example.com",
-                f"Set {TOKEN_VARS[0]} to a long-lived access token from your profile page, under Security",
-                "Run `ha-axi doctor` again once both are set",
-            ]
-        )
+        doc["help"] = HelpBlock(setup_help())
         doc["__exit_code__"] = 1
     return doc

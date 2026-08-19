@@ -103,7 +103,13 @@ def test_service_list_rejects_an_unknown_domain(run_cli, rest_env):
     assert "no service domain named 'nope'" in out
 
 
-def test_service_call_sends_targets_and_data(run_cli, rest_env, rest_server):
+def test_service_call_sends_targets_flat_as_home_assistant_requires(run_cli, rest_env, rest_server):
+    """Targets go flat in the body, not nested under `target`.
+
+    The REST endpoint hands the body to the service as its data and never
+    unwraps a `target` key, so a nested one is rejected as an extra key. The
+    double enforces that, so this asserts the shape a real instance accepts.
+    """
     code, out = run_cli(
         [
             "service",
@@ -118,12 +124,46 @@ def test_service_call_sends_targets_and_data(run_cli, rest_env, rest_server):
     )
     assert code == 0
     posted = [r for r in rest_server.requests if r["path"] == "/api/services/light/turn_on"]
-    assert posted[0]["body"] == {
-        "brightness": 180,
-        "target": {"entity_id": ["light.example_lamp"]},
-    }
+    assert posted[0]["body"] == {"brightness": 180, "entity_id": ["light.example_lamp"]}
+    assert "target" not in posted[0]["body"]
     assert "service: light.turn_on" in out
     assert "changed[1]{entity_id,name,state}:" in out
+
+
+def test_service_call_sends_every_target_kind_flat(run_cli, rest_env, rest_server):
+    code, _ = run_cli(
+        [
+            "service",
+            "call",
+            "light.turn_on",
+            "--target-entity",
+            "light.example_lamp",
+            "--target-area",
+            "example_room",
+            "--target-device",
+            "device_one",
+        ],
+        rest_env,
+    )
+    assert code == 0
+    body = next(r for r in rest_server.requests if r["path"] == "/api/services/light/turn_on")[
+        "body"
+    ]
+    assert body == {
+        "entity_id": ["light.example_lamp"],
+        "area_id": ["example_room"],
+        "device_id": ["device_one"],
+    }
+
+
+def test_the_rest_double_rejects_a_nested_target(run_cli, rest_env):
+    """The regression guard itself: a nested target must fail loudly."""
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--data-json", '{"target": {"entity_id": "x"}}'],
+        rest_env,
+    )
+    assert code == 1
+    assert "extra keys not allowed" in out
 
 
 def test_service_call_merges_a_json_object_over_key_value_data(run_cli, rest_env, rest_server):
@@ -308,3 +348,57 @@ def test_a_response_cut_off_mid_body_reports_the_transport_not_a_traceback(run_c
     assert "dropped mid-response" in out
     assert "CONNECTION_DROPPED" in out
     assert "Traceback" not in out
+
+
+# ------------------------------------------------- error translation paths
+
+
+def test_a_method_not_allowed_is_translated(run_cli, rest_env, rest_server):
+    rest_server.status_override = (405, {"message": "Method not allowed"})
+    code, out = run_cli(["api", "DELETE", "/states"], rest_env)
+    assert code == 1
+    assert "DELETE is not allowed" in out
+    assert "ha-axi api --help" in out
+
+
+def test_an_unmapped_status_reports_the_code_and_the_server_message(run_cli, rest_env, rest_server):
+    rest_server.status_override = (503, {"message": "Service unavailable"})
+    code, out = run_cli(["state", "list"], rest_env)
+    assert code == 1
+    assert "HTTP 503" in out
+    assert "Service unavailable" in out
+    assert "Traceback" not in out
+
+
+def test_an_unparseable_json_body_falls_back_to_the_raw_text(run_cli, rest_env, rest_server):
+    """A malformed body must not raise; the caller still gets something usable."""
+    rest_server.malformed_json = b"{not json at all"
+    code, out = run_cli(["api", "/config"], rest_env)
+    assert code == 0
+    assert "not json at all" in out
+
+
+def test_a_slow_instance_times_out_with_an_actionable_error(run_cli, rest_server):
+    rest_server.delay = 1.0
+    env = {"HA_URL": rest_server.url, "HA_TOKEN": FAKE_TOKEN}
+    code, out = run_cli(["--timeout", "0.15", "state", "list"], env)
+    assert code == 1
+    assert "timed out after 0.15s" in out
+    assert "--timeout 60" in out
+    assert "Traceback" not in out
+
+
+def test_a_tls_failure_is_named_as_one(rest_env):
+    """Translated directly: standing up a broken TLS endpoint proves nothing extra."""
+    import ssl
+    import urllib.error
+
+    from ha_axi.config import load
+    from ha_axi.errors import ConnectionFailed
+    from ha_axi.rest import RestClient
+
+    client = RestClient(load(rest_env))
+    error = client._url_error(urllib.error.URLError(ssl.SSLError("handshake failure")))
+    assert isinstance(error, ConnectionFailed)
+    assert error.code == "TLS_ERROR"
+    assert "scheme your instance actually serves" in " ".join(error.help_lines)

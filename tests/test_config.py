@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import FAKE_TOKEN
-from ha_axi import config
+from ha_axi import config, output
 from ha_axi.errors import ConfigError
 
 
@@ -47,10 +47,61 @@ def test_missing_configuration_names_what_is_absent(environ, expected):
     assert caught.value.help_lines
 
 
-def test_base_url_normalization_adds_a_scheme_and_trims_noise():
-    assert config.normalize_base_url("ha.example.com") == "http://ha.example.com"
+def test_a_bare_host_defaults_to_https_not_cleartext():
+    """A silent http:// default would send the access token in the clear."""
+    assert config.normalize_base_url("ha.example.com") == "https://ha.example.com"
+    assert config.normalize_base_url("ha.example.com:8123") == "https://ha.example.com:8123"
+    # An explicit scheme is always honoured.
+    assert config.normalize_base_url("http://ha.example.com") == "http://ha.example.com"
+
+
+def test_base_url_normalization_trims_noise():
     assert config.normalize_base_url("https://ha.example.com/") == "https://ha.example.com"
     assert config.normalize_base_url("https://ha.example.com/api") == "https://ha.example.com"
+
+
+def test_url_credentials_are_stripped_and_registered_as_secrets():
+    """Basic-auth userinfo must not survive into anything printable.
+
+    The no-argument home view prints the base URL, and `setup hooks` runs that
+    view into every agent session, so userinfo there would land in transcripts.
+    """
+    resolved = config.normalize_base_url("https://someone:hunter2@ha.example.com")
+    assert resolved == "https://ha.example.com"
+    assert "someone" not in resolved and "hunter2" not in resolved
+    # The property that matters is that the password cannot survive, however
+    # the surrounding text is shaped.
+    assert "hunter2" not in output.redact("password is hunter2")
+    assert "hunter2" not in output.redact("pair is someone:hunter2")
+    assert output.redact("pair is someone:hunter2") == "pair is <redacted>"
+
+
+def test_the_home_view_never_prints_url_credentials(run_cli, rest_server):
+    host = rest_server.url.split("://", 1)[1]
+    env = {"HA_URL": f"http://someone:hunter2@{host}", "HA_TOKEN": FAKE_TOKEN}
+    code, out = run_cli([], env)
+    assert code == 0
+    assert "hunter2" not in out
+    assert "someone" not in out
+
+
+@pytest.mark.parametrize("bad", ["with space", "with\nnewline", "with\ttab", "trailing\r"])
+def test_a_token_that_cannot_be_a_header_is_rejected_before_use(bad):
+    """http.client raises a ValueError embedding the whole Bearer header.
+
+    That is a credential inside a traceback, so the token is validated at the
+    point it is read rather than at the point it is encoded.
+    """
+    with pytest.raises(ConfigError) as caught:
+        config.load({"HA_URL": "https://ha.example.com", "HA_TOKEN": f"abc{bad}def"})
+    assert caught.value.code == "BAD_TOKEN"
+    assert bad.strip() not in caught.value.message
+    assert "abc" not in caught.value.message
+
+
+def test_loading_registers_the_token_as_a_secret():
+    config.load({"HA_URL": "https://ha.example.com", "HA_TOKEN": FAKE_TOKEN})
+    assert output.redact(f"leaked {FAKE_TOKEN}") == "leaked <redacted>"
 
 
 def test_base_url_rejects_an_unusable_scheme():

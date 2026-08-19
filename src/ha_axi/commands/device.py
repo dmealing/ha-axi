@@ -6,10 +6,11 @@ from ..argspec import Command, Flag, Sub
 from ..output import HelpBlock
 from ._common import (
     area_name_map,
+    count_line,
+    filter_by_area,
     matches_search,
     parse_limit,
     project,
-    resolve_area,
     select_fields,
 )
 
@@ -78,16 +79,8 @@ def run(ctx, sub: str, parsed):
     ]
     total = len(rows)
 
-    scope = []
-    area_filter = parsed.get("area")
-    if area_filter:
-        if area_filter.strip().lower() in ("none", "null", ""):
-            rows = [row for row in rows if not row["area_id"]]
-            scope.append("with no area")
-        else:
-            area = resolve_area(areas, area_filter)
-            rows = [row for row in rows if row["area_id"] == area.get("area_id")]
-            scope.append(f"in area {area.get('name')}")
+    scope: list = []
+    rows = filter_by_area(rows, areas, parsed.get("area"), scope)
 
     search = parsed.get("search")
     if search:
@@ -110,11 +103,7 @@ def run(ctx, sub: str, parsed):
     limit = parse_limit(parsed.get("limit"), default=DEFAULT_LIMIT)
     fields = select_fields(parsed.get("fields"), LIST_FIELDS, DEFAULT_LIST_FIELDS)
     shown = rows[:limit]
-    count = (
-        f"{len(shown)} of {matched} matched ({total} total)"
-        if scope
-        else f"{len(shown)} of {total} total"
-    )
+    count = count_line(len(shown), matched, total, filtered=bool(scope))
     help_lines = ["Run `ha-axi entity list --area <id|name>` to see the entities in an area"]
     if len(shown) < matched:
         help_lines.append(f"Run `ha-axi device list --limit {matched}` to see all {matched}")

@@ -80,7 +80,15 @@ def _skill(ctx, parsed):
                 "help": HelpBlock([f"Run `ha-axi setup skill --path {root}` to write it"]),
                 "__exit_code__": 1,
             }
-        if path.read_text(encoding="utf-8") != content:
+        try:
+            committed = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise UsageError(
+                f"could not read {path}: {exc.strerror or exc}",
+                help_lines=[f"Run `ha-axi setup skill --path {root}` to rewrite it"],
+                code="UNREADABLE",
+            ) from None
+        if committed != content:
             return {
                 "skill": str(path),
                 "status": "stale",

@@ -7,7 +7,7 @@ import sys
 
 from . import __version__, output
 from . import config as config_module
-from .argspec import Command, parse, render_command_help
+from .argspec import GLOBAL_FLAGS, Command, parse, render_command_help
 from .commands import api as api_command
 from .commands import area as area_command
 from .commands import device as device_command
@@ -139,6 +139,49 @@ def render_root_help() -> str:
 # ------------------------------------------------------------------ dispatch
 
 
+#: Global flags that take no value, derived from the single declaration in
+#: argspec so the two cannot drift apart.
+_VALUELESS_GLOBALS = tuple(flag for flag in GLOBAL_FLAGS if flag != "--timeout")
+
+
+def _help_requested(command: Command, argv: list) -> bool:
+    """Whether ``--help`` appears as a flag rather than as a flag's value.
+
+    `template render --template --help` must render the literal string, not
+    print help. Scanning raw argv cannot tell the two apart, so this walks the
+    tokens and skips the value of any flag the command declares as taking one.
+    """
+    value_flags = {flag.name for sub in command.subs for flag in sub.flags if flag.takes_value}
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+        name, has_inline, _ = token.partition("=")
+        if name in ("--help", "-h") and not has_inline:
+            return True
+        if name in value_flags and not has_inline:
+            index += 1  # skip the value, whatever it looks like
+        elif name == "--timeout" and not has_inline:
+            index += 1
+    return False
+
+
+def _prescan_mode(argv: list) -> str:
+    """Decide the output mode from the whole invocation, before parsing.
+
+    An agent that appends `--json` and pipes the result to a parser needs the
+    machine-readable form most when the invocation is wrong, so the mode has to
+    be known before any usage error can be raised -- including for a flag that
+    appears after the subcommand.
+    """
+    seen: dict = {}
+    for token in argv:
+        name = token.partition("=")[0]
+        if name in ("--json", "--human"):
+            seen[name.lstrip("-")] = True
+    return _mode(seen)
+
+
 def _split_globals(argv: list) -> tuple:
     """Pull global flags off the front of the invocation, before the command."""
     globals_: dict = {}
@@ -148,15 +191,17 @@ def _split_globals(argv: list) -> tuple:
         if not token.startswith("-") or token == "-":
             break
         name, sep, inline = token.partition("=")
-        if name in ("--timeout",):
+        if name == "--timeout":
             index += 1
             if sep:
                 globals_["timeout"] = inline
             elif index < len(argv):
                 globals_["timeout"] = argv[index]
                 index += 1
+            else:
+                globals_["timeout"] = _MISSING_VALUE
             continue
-        if name in ("--human", "--json", "--debug", "--help", "-h", "--version", "-v", "-V"):
+        if name in _VALUELESS_GLOBALS:
             globals_[name.lstrip("-")] = True
             index += 1
             continue
@@ -164,9 +209,20 @@ def _split_globals(argv: list) -> tuple:
     return globals_, argv[index:]
 
 
+#: Sentinel for `--timeout` given without a value, so it errors rather than
+#: being silently swallowed the way an unvalidated global would be.
+_MISSING_VALUE = object()
+
+
 def _resolve_timeout(raw) -> float | None:
     if raw is None:
         return None
+    if raw is _MISSING_VALUE:
+        raise UsageError(
+            "--timeout needs a value",
+            help_lines=["Run `ha-axi --timeout 60 <command>`"],
+            code="BAD_TIMEOUT",
+        )
     try:
         value = float(raw)
     except (TypeError, ValueError):
@@ -256,7 +312,11 @@ def main(argv: list | None = None, *, environ=None) -> int:
     environ = os.environ if environ is None else environ
 
     globals_, rest = _split_globals(argv)
-    mode = _mode(globals_)
+    # Pre-scan so a usage error is reported in the mode the caller asked for,
+    # then refine once the leading globals are known.
+    mode = _prescan_mode(argv)
+    if "--debug" in argv:
+        output.set_debug(True)
 
     try:
         if _wants_version(globals_):
@@ -274,12 +334,7 @@ def main(argv: list | None = None, *, environ=None) -> int:
             if module is None or name == "home":
                 raise _unknown_command(name)
             command = module.COMMAND
-            if (
-                globals_.get("help")
-                or globals_.get("h")
-                or "--help" in rest[1:]
-                or "-h" in rest[1:]
-            ):
+            if globals_.get("help") or globals_.get("h") or _help_requested(command, rest[1:]):
                 output.write_text(render_command_help(command))
                 return EXIT_OK
             sub, sub_argv = _pick_sub(command, rest[1:])
@@ -300,8 +355,7 @@ def main(argv: list | None = None, *, environ=None) -> int:
                 return EXIT_OK
 
         if globals_.get("debug"):
-            environ = dict(environ)
-            environ["HA_AXI_DEBUG"] = "1"
+            output.set_debug(True)
 
         ctx = Context(environ, mode=mode, timeout=_resolve_timeout(globals_.get("timeout")))
         doc = module.run(ctx, sub_name, parsed)
@@ -311,6 +365,28 @@ def main(argv: list | None = None, *, environ=None) -> int:
     except KeyboardInterrupt:  # pragma: no cover - interactive interruption
         output.write({"error": "interrupted"}, mode)
         return EXIT_ERROR
+    except Exception as exc:
+        # Without this, an unexpected exception prints a raw traceback on
+        # stderr, bypassing redaction entirely and leaving stdout empty. Both
+        # halves matter: the documented contract is that errors arrive on
+        # stdout in the same structured shape, and that a credential can never
+        # escape. Anything reaching here is a bug, so name it as one.
+        output.write(
+            {
+                "error": f"internal error: {type(exc).__name__}: {exc}",
+                "code": "INTERNAL_ERROR",
+                "help": HelpBlock(
+                    [
+                        "This is a bug in ha-axi; the command did not complete",
+                        "Re-run with `--debug` for a diagnostic trace on stderr",
+                        "Report it at https://github.com/dmealing/ha-axi/issues",
+                    ]
+                ),
+            },
+            mode,
+        )
+        output.debug_exception(exc)
+        return EXIT_ERROR
 
     exit_code = EXIT_OK
     if isinstance(doc, dict) and "__exit_code__" in doc:
@@ -318,7 +394,3 @@ def main(argv: list | None = None, *, environ=None) -> int:
         exit_code = doc.pop("__exit_code__")
     output.write(doc, mode)
     return exit_code
-
-
-def entrypoint() -> None:  # pragma: no cover - thin console-script shim
-    sys.exit(main())

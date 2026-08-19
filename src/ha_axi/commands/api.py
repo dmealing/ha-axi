@@ -6,6 +6,7 @@ import json
 
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
+from ..rest import api_path
 from ._common import parse_json_flag, parse_pairs
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
@@ -53,9 +54,7 @@ def run(ctx, sub: str, parsed):
         query={k: _query_value(v) for k, v in query.items()} or None,
     )
 
-    doc = {
-        "request": {"method": method, "path": path if path.startswith("/api") else f"/api{path}"}
-    }
+    doc = {"request": {"method": method, "path": api_path(path)}}
     if result is None or result == "":
         doc["result"] = f"{method} succeeded with an empty response"
     else:

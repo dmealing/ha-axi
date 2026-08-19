@@ -123,16 +123,20 @@ def _call(ctx, parsed):
     data = parse_pairs(parsed.get("data", []), flag="--data")
     data.update(parse_json_flag(parsed.get("data_json"), flag="--data-json"))
 
-    targets = {}
-    if parsed.get("target_entity"):
-        targets["entity_id"] = parsed.get("target_entity")
-    if parsed.get("target_area"):
-        targets["area_id"] = parsed.get("target_area")
-    if parsed.get("target_device"):
-        targets["device_id"] = parsed.get("target_device")
-    if targets:
-        existing = data.get("target")
-        data["target"] = {**existing, **targets} if isinstance(existing, dict) else targets
+    # The REST endpoint passes this body straight through as the service data
+    # and never unwraps a `target` key, while entity services validate
+    # entity_id / device_id / area_id flat at the top level under
+    # PREVENT_EXTRA. A nested target is rejected twice over, so emit them flat.
+    # (The WebSocket `call_service` command does take a nested target; this
+    # shape is specific to REST.)
+    for flag, key in (
+        ("target_entity", "entity_id"),
+        ("target_area", "area_id"),
+        ("target_device", "device_id"),
+    ):
+        selected = parsed.get(flag)
+        if selected:
+            data[key] = selected
 
     result = ctx.rest().call_service(
         domain, service, data, return_response=parsed.get("response", False)

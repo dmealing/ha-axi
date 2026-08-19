@@ -11,6 +11,7 @@ from ..argspec import Command, Flag, Sub
 from ..output import HelpBlock, truncate
 from ._common import (
     PREVIEW_CHARS,
+    count_line,
     domain_of,
     friendly_name,
     matches_search,
@@ -94,7 +95,7 @@ def _list(ctx, parsed):
     fields = select_fields(parsed.get("fields"), LIST_FIELDS, DEFAULT_LIST_FIELDS)
     shown = rows[:limit]
 
-    filtered = matched != total
+    filtered = bool(domains or wanted_state or search)
     if not shown:
         scope = _scope(domains, wanted_state, search)
         return {
@@ -108,9 +109,7 @@ def _list(ctx, parsed):
             ),
         }
 
-    count = f"{len(shown)} of {matched} matched" if filtered else f"{len(shown)} of {total} total"
-    if filtered:
-        count = f"{count} ({total} total)"
+    count = count_line(len(shown), matched, total, filtered=filtered)
 
     help_lines = ["Run `ha-axi state get <entity_id>` for one entity's full attributes"]
     if len(shown) < matched:

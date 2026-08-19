@@ -27,6 +27,7 @@ From a checkout:
 
 ```sh
 pip install -e ".[dev]"
+scripts/install-hooks.sh   # point core.hooksPath at .githooks
 ```
 
 ## Configure
@@ -186,15 +187,34 @@ by a convention:
 ```sh
 scripts/leakcheck.py            # scan every tracked file
 scripts/leakcheck.py --staged   # scan what a commit would actually record
+scripts/leakcheck.py --commit-msg <path>   # scan a commit message
+scripts/leakcheck.py --rules    # list the rules and what each one catches
 scripts/leakcheck.py --demo     # self-test: prove every rule still fires
 ```
 
-It rejects five shapes: **JWTs** (what a Home Assistant token looks like), **RFC1918 addresses**,
-**absolute home directories**, **emails outside the reserved documentation domains**, and literal
-**bearer credentials**. Loopback, public addresses and `example.com` are all fine. A line that
-must legitimately keep one of these shapes can carry the marker `leakcheck: allow`.
+**What it catches.** Run `--rules` for the live list; today it is JWTs (what a Home Assistant token
+looks like), RFC1918 and CGNAT addresses, IPv4/IPv6 link-local and unique-local addresses, `.local`
+/`.lan`/`.localdomain` hostnames, `*.ui.nabu.casa` remote-access hostnames, geographic coordinates
+(`/api/config` returns the house's), MAC and Zigbee IEEE addresses, absolute home directories,
+emails outside the reserved documentation domains, and literal bearer credentials.
 
-It runs in two places:
+Each file is scanned twice: once **per line**, and once **condensed**, with whitespace, quotes,
+backslashes and `+` removed from the whole file. A credential split across lines or assembled by
+concatenation is invisible to a line pass, and splitting a token across fragments is exactly how one
+hides — deliberately or not. The condensed pass runs only the token rules, because joining arbitrary
+lines can fuse unrelated digits into a plausible address, and a guard that cries wolf gets bypassed.
+
+**What it does not catch,** stated plainly so the coverage is not mistaken for more than it is: a
+generic public hostname or IP that happens to be someone's instance, a secret that is neither
+JWT-shaped nor bearer-prefixed, anything inside a binary or an image, and any shape no rule
+describes. The scanner narrows the ways a leak can happen; it does not make review unnecessary.
+
+A line that must legitimately keep one of these shapes carries `leakcheck: allow=<rule>`. The
+exemption is **per rule on purpose** — a blanket marker would switch off every rule on that line,
+including one nobody was thinking about, which is how a live credential hides behind a suppressed
+lint.
+
+It runs in three places:
 
 ```sh
 scripts/install-hooks.sh   # points core.hooksPath at .githooks
@@ -202,11 +222,15 @@ scripts/install-hooks.sh   # points core.hooksPath at .githooks
 
 - **`.githooks/pre-commit`** blocks the commit locally, including the very first commit in a
   repository, which has no `HEAD` to diff against.
+- **`.githooks/commit-msg`** scans the message, which is a separate channel from file content and
+  just as public.
 - **CI** runs `--demo` first — proving the scanner still detects what it claims — and then scans
-  the whole tree. Bypassing the local hook only delays the failure.
+  the whole tree. Bypassing the local hooks only delays the failure.
 
 Fixtures, tests, docs and examples use invented identifiers throughout:
-`light.example_lamp`, area `Example Room`, `https://homeassistant.example.com`.
+`light.example_lamp`, area `Example Room`, `https://homeassistant.example.com`. Test fixtures build
+credential shapes at run time rather than embedding literals, so the suite that proves the scanner
+works does not itself trip it.
 
 ## Testing
 
@@ -225,19 +249,39 @@ Covered by tests:
 - the TOON encoder against the specification's rules — tabular, keyed tabular, list and inline
   forms, quoting, escaping, delimiters, root forms;
 - every command's output shape, filters, field selection, limits and empty states;
-- the full WebSocket protocol: handshake, auth rejection, id correlation, registry reads and
-  updates, idempotent no-ops, and error translation;
-- flag validation, renamed-flag hints, exit codes, and `--help` for every command without any
-  configuration present;
-- redaction, including that a rejected token never appears in its own error message;
-- the leak scanner in both directions, and the pre-commit hook end to end via a real `git commit`;
-- hook installation: idempotency, path repair, and leaving other tools' hooks alone.
+- the WebSocket protocol beyond the happy path: the handshake, an unexpected greeting, a message
+  arriving mid-authentication, auth rejection, event and pong frames interleaved with results, id
+  correlation, a non-JSON frame, a socket closed mid-command, both directions of the error
+  boundary, implicit connect, and a registry larger than the library's default frame size;
+- **credential containment**: a cross-origin redirect refused rather than followed, a token that
+  cannot be a header rejected before it reaches one, URL userinfo stripped and redacted, an
+  unexpected exception rendered as a structured error on stdout instead of a traceback, and
+  **stderr asserted clean and redacted** — the gap that let two escapes ship;
+- flag validation, renamed-flag hints, exit codes, `--help` in every position (and never stolen
+  from a flag value), and `--help` for every command without any configuration present;
+- the leak scanner adversarially: every rule against the shape it claims, every rule against
+  content that must not trip it, the split/concatenated/percent-encoded evasions, the scoped allow
+  marker, and both git hooks end to end through a real `git commit`;
+- hook installation: idempotency, path repair, atomic writes, and leaving other tools' hooks alone.
 
-**Would need a live installation to confirm:** that the real Home Assistant server accepts the
-exact request bodies built here — service-call `target` shapes, `config/entity_registry/update`
-field names, `return_response` behaviour — and how a very large registry behaves in practice. The
-doubles implement the documented protocol, so they verify this client against the specification,
-not against a particular server build.
+**Would need a live installation to confirm:** that a real Home Assistant accepts the exact request
+bodies built here — `config/entity_registry/update` field names, `return_response` behaviour, and
+the service-data keys individual integrations validate — and how a very large registry behaves in
+practice. The doubles implement the documented protocol and enforce the parts of it that are known
+(the REST double rejects a nested service-call `target` the way Home Assistant does), so they verify
+this client against the specification rather than against a particular server build.
+
+## Releasing
+
+Version bumps and the changelog are driven from conventional commits by
+[release-please](https://github.com/googleapis/release-please), which opens a release PR on every
+push to `main`. Merging that PR builds the distribution, smoke-tests the built wheel, and publishes
+to PyPI through [trusted publishing](https://docs.pypi.org/trusted-publishers/) — an OIDC exchange,
+so **no long-lived PyPI token exists in this repository or anywhere else**.
+
+Trusted publishing requires a one-time configuration on PyPI by the repository owner (project
+`ha-axi`, owner `dmealing`, workflow `release.yml`, environment `pypi`) before the first publish
+succeeds.
 
 ## License
 

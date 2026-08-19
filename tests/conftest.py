@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -23,6 +24,23 @@ from ha_axi import output
 
 #: An obviously-synthetic token. It is not a JWT and grants nothing.
 FAKE_TOKEN = "example-test-token-not-a-real-credential"
+
+
+def synthetic_jwt() -> str:
+    """A structurally valid, entirely fake JWT, assembled at run time.
+
+    Encoding the header and payload here rather than writing the `eyJ...`
+    literal keeps the shape out of the test sources, so the leak scanner's
+    condensed pass -- which exists to catch exactly such a literal split across
+    lines -- does not fire on the tests that exercise it.
+    """
+    import base64
+    import json
+
+    def segment(payload):
+        return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+
+    return f"{segment({'alg': 'HS256'})}.{segment({'sub': 'example'})}.c2lnbmF0dXJlaGVyZQ"
 
 
 # --------------------------------------------------------------- fixture data
@@ -163,6 +181,13 @@ class FakeRestServer:
             "service_result": None,
         }
         self.status_override = None
+        #: Seconds to stall before answering, for exercising client timeouts.
+        self.delay = 0.0
+        #: Answer with this raw body and Content-Type: application/json.
+        self.malformed_json = None
+        #: When set to a URL, the NEXT request answers 302 pointing at it and
+        #: the setting clears, so a followed redirect can reach a real handler.
+        self.redirect_to = None
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -176,11 +201,12 @@ class FakeRestServer:
                 return header == f"Bearer {FAKE_TOKEN}"
 
             def _send(self, code, payload, content_type="application/json"):
-                body = (
-                    json.dumps(payload).encode()
-                    if content_type == "application/json"
-                    else str(payload).encode()
-                )
+                if isinstance(payload, bytes):
+                    body = payload
+                elif content_type == "application/json":
+                    body = json.dumps(payload).encode()
+                else:
+                    body = str(payload).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
@@ -201,6 +227,17 @@ class FakeRestServer:
                     }
                 )
 
+                if outer.delay:
+                    time.sleep(outer.delay)
+                if outer.malformed_json is not None:
+                    return self._send(200, outer.malformed_json, content_type="application/json")
+                if outer.redirect_to is not None:
+                    location, outer.redirect_to = outer.redirect_to, None
+                    self.send_response(302)
+                    self.send_header("Location", location)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if outer.status_override is not None:
                     code, payload = outer.status_override
                     return self._send(code, payload)
@@ -222,6 +259,14 @@ class FakeRestServer:
                 if path == "/api/services" and method == "GET":
                     return self._send(200, outer.state["services"])
                 if path.startswith("/api/services/") and method == "POST":
+                    # Home Assistant validates service data under
+                    # vol.Schema(..., extra=vol.PREVENT_EXTRA); a nested
+                    # `target` key is an extra key and is rejected. Mirroring
+                    # that here is what stops a wrong wire shape passing.
+                    if isinstance(body, dict) and "target" in body:
+                        return self._send(
+                            400, {"message": "extra keys not allowed @ data['target']"}
+                        )
                     result = outer.state["service_result"]
                     if result is None:
                         result = [outer.state["states"][0]]
@@ -273,12 +318,26 @@ class FakeWsServer:
         self.devices = [json.loads(json.dumps(d)) for d in DEVICE_REGISTRY]
         self.fail_next = None
         self.close_after = None
+        #: Frames to emit before the next command result, e.g. an event or a
+        #: pong, which a real instance interleaves freely.
+        self.interleave = []
+        #: Replace the auth_required greeting with something else.
+        self.greeting = None
+        #: Send an extra message between `auth` and `auth_ok`.
+        self.mid_auth = None
+        #: Emit a non-JSON frame instead of the next result.
+        self.send_garbage = False
+        #: Close the connection instead of answering the next command.
+        self.close_on_command = False
         self._server = None
         self._thread = None
 
     # -- protocol ----------------------------------------------------------
 
     def _handler(self, websocket):
+        if self.greeting is not None:
+            websocket.send(json.dumps(self.greeting))
+            return
         websocket.send(json.dumps({"type": "auth_required", "ha_version": "2026.1.0"}))
         message = json.loads(websocket.recv())
         if message.get("type") != "auth" or message.get("access_token") != FAKE_TOKEN:
@@ -286,6 +345,9 @@ class FakeWsServer:
             return
         if self.reject_auth:
             websocket.send(json.dumps({"type": "auth_invalid", "message": "Invalid access token"}))
+            return
+        if self.mid_auth is not None:
+            websocket.send(json.dumps(self.mid_auth))
             return
         websocket.send(json.dumps({"type": "auth_ok", "ha_version": "2026.1.0"}))
 
@@ -296,6 +358,18 @@ class FakeWsServer:
                 return
             command = json.loads(raw)
             self.received.append(command)
+            if self.close_on_command:
+                websocket.close()
+                return
+            if self.send_garbage:
+                self.send_garbage = False
+                websocket.send("this is not json")
+                continue
+            # A real instance interleaves events and pongs with results; the
+            # client must skip them rather than mis-correlate.
+            for frame in self.interleave:
+                websocket.send(json.dumps(frame))
+            self.interleave = []
             websocket.send(json.dumps(self._respond(command)))
             if self.close_after is not None and len(self.received) >= self.close_after:
                 # Close inside the handler so the close frame follows the last

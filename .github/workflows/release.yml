@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Drives version bumps and the changelog from conventional commits, and opens
+  # a release PR. Merging that PR is what cuts a release.
+  release-please:
+    name: release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: publish to PyPI
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ha-axi
+    permissions:
+      # The only credential involved: a short-lived OIDC token minted for this
+      # run. No long-lived PyPI token exists in this repository or anywhere else.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+
+      # Publishing a broken artifact is worse than not publishing: install what
+      # was actually built and confirm the entry point runs before it ships.
+      - name: Smoke-test the built wheel
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --quiet dist/*.whl
+          /tmp/verify/bin/ha-axi --version
+          /tmp/verify/bin/ha-axi state --help > /dev/null
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

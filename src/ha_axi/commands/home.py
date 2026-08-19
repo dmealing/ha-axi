@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from ..argspec import Command, Sub
-from ..config import TOKEN_VARS, URL_VARS, describe_environment
+from ..config import missing_env_vars, setup_help
 from ..errors import AxiError
 from ..output import HelpBlock
 from ._common import domain_of
@@ -47,22 +47,10 @@ def executable_path() -> str:
 
 def run(ctx, sub: str, parsed):
     doc = {"bin": executable_path(), "description": DESCRIPTION}
-    env = describe_environment(ctx.environ)
-
-    if not (env["url_set"] and env["token_set"]):
-        missing = []
-        if not env["url_set"]:
-            missing.append(URL_VARS[0])
-        if not env["token_set"]:
-            missing.append(TOKEN_VARS[0])
+    missing = missing_env_vars(ctx.environ)
+    if missing:
         doc["error"] = f"{' and '.join(missing)} not set in the environment"
-        doc["help"] = HelpBlock(
-            [
-                f"Set {URL_VARS[0]} to your Home Assistant base URL, e.g. https://homeassistant.example.com",
-                f"Set {TOKEN_VARS[0]} to a long-lived access token from your profile page, under Security",
-                "Run `ha-axi doctor` to verify the connection once both are set",
-            ]
-        )
+        doc["help"] = HelpBlock(setup_help())
         doc["__exit_code__"] = 1
         return doc
 

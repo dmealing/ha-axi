@@ -331,3 +331,47 @@ def test_writing_to_a_closed_connection_is_a_structured_failure(ws_env, ws_serve
         with pytest.raises(ConnectionFailed) as raised:
             client.run("area.list")
     assert raised.value.code == "WS_CLOSED"
+
+
+def test_device_list_filters_by_area(run_cli, ws_env):
+    code, out = run_cli(["device", "list", "--area", "Example Room"], ws_env)
+    assert code == 0
+    assert "device_one" in out and "device_two" not in out
+    assert "count: 1 of 1 matched (2 total)" in out
+
+
+def test_device_list_finds_devices_with_no_area(run_cli, ws_env, ws_server):
+    ws_server.devices.append(
+        {
+            "id": "device_three",
+            "name": "Example Device Three",
+            "name_by_user": None,
+            "area_id": None,
+            "manufacturer": "Example Co",
+            "model": "Model Z",
+        }
+    )
+    code, out = run_cli(["device", "list", "--area", "none"], ws_env)
+    assert code == 0
+    assert "device_three" in out and "device_one" not in out
+
+
+def test_device_list_searches_name_manufacturer_and_model(run_cli, ws_env):
+    _, by_model = run_cli(["device", "list", "--search", "Model Y"], ws_env)
+    assert "device_two" in by_model and "device_one" not in by_model
+
+    _, by_maker = run_cli(["device", "list", "--search", "Example Co"], ws_env)
+    assert "device_one" in by_maker and "device_two" in by_maker
+
+
+def test_device_list_states_the_zero_explicitly(run_cli, ws_env):
+    code, out = run_cli(["device", "list", "--search", "nothing-matches"], ws_env)
+    assert code == 0
+    assert "0 devices found" in out
+    assert "2 devices in the device registry" in out
+
+
+def test_device_list_rejects_an_unknown_area(run_cli, ws_env):
+    code, out = run_cli(["device", "list", "--area", "Nowhere"], ws_env)
+    assert code == 1
+    assert "no area with id or name" in out

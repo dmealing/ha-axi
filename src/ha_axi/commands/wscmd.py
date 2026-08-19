@@ -50,7 +50,18 @@ COMMAND = Command(
 
 
 def run(ctx, sub: str, parsed):
-    if parsed.get("list") or not parsed.positionals:
+    if parsed.get("list"):
+        return _list(parsed)
+    if not parsed.positionals:
+        if parsed.get("raw"):
+            raise UsageError(
+                "--raw needs an API command type",
+                help_lines=[
+                    "Run `ha-axi ws --raw config/floor_registry/list`",
+                    "Run `ha-axi ws --list` to see the declared commands",
+                ],
+                code="MISSING_COMMAND",
+            )
         return _list(parsed)
 
     name = parsed.positionals[0]

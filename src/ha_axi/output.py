@@ -30,9 +30,18 @@ _BEARER = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
 _secrets: set = set()
 
 
-def register_secret(value: str | None) -> None:
-    """Register a literal string that must never reach stdout or stderr."""
-    if value and len(value) >= 8:
+#: Below this length, redacting a literal does more damage than good: a short
+#: string collides with ordinary words and would corrupt unrelated output.
+MIN_SECRET_LENGTH = 8
+
+
+def register_secret(value: str | None, *, min_length: int = MIN_SECRET_LENGTH) -> None:
+    """Register a literal string that must never reach stdout or stderr.
+
+    ``min_length`` is lowered only for values already known to be credentials
+    by where they came from -- URL userinfo, say -- rather than by their shape.
+    """
+    if value and len(value) >= min_length:
         _secrets.add(value)
 
 
@@ -43,7 +52,9 @@ def reset_secrets() -> None:
 
 def redact(text: str) -> str:
     """Remove credentials from ``text`` by literal match and by shape."""
-    for secret in _secrets:
+    # Longest first, so an overlapping pair (`user:password`) is replaced whole
+    # rather than leaving a half-redacted fragment behind.
+    for secret in sorted(_secrets, key=len, reverse=True):
         text = text.replace(secret, REDACTED)
     text = _BEARER.sub(lambda m: m.group(1) + REDACTED, text)
     return _JWT.sub(REDACTED, text)
@@ -198,8 +209,35 @@ def write_text(text: str, stream=None) -> None:
     stream.flush()
 
 
+_debug_enabled = False
+
+
+def set_debug(enabled: bool) -> None:
+    """Turn stderr diagnostics on for this process."""
+    global _debug_enabled
+    _debug_enabled = bool(enabled)
+
+
+def debug_enabled() -> bool:
+    return _debug_enabled or bool(os.environ.get("HA_AXI_DEBUG"))
+
+
 def debug(message: str) -> None:
-    """Emit a diagnostic on stderr, which agents do not read."""
-    if os.environ.get("HA_AXI_DEBUG"):
+    """Emit a diagnostic on stderr, which agents do not read.
+
+    Redacted like stdout: stderr is not a safe channel for a credential just
+    because agents ignore it -- it still reaches terminals, logs and CI output.
+    """
+    if debug_enabled():
         sys.stderr.write(redact(f"ha-axi: {message}") + "\n")
+        sys.stderr.flush()
+
+
+def debug_exception(exc: BaseException) -> None:
+    """Write a redacted traceback for an unexpected error."""
+    if debug_enabled():
+        import traceback
+
+        trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        sys.stderr.write(redact(trace))
         sys.stderr.flush()

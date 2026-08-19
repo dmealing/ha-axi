@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..errors import NotFound, UsageError
+from ..errors import AxiError, NotFound, UsageError
 
 #: Preview length for long free-text values before `--full` is needed.
 PREVIEW_CHARS = 1200
@@ -161,9 +161,14 @@ def resolve_area(areas: list, needle: str) -> dict:
         return matches[0]
     if len(matches) > 1:
         ids = ", ".join(a.get("area_id", "") for a in matches)
-        raise UsageError(
+        # Exit 1, not 2: the command was well formed, and only a lookup
+        # against the live registry could reveal the name is shared.
+        raise AxiError(
             f"{needle!r} matches more than one area: {ids}",
-            help_lines=["Pass the area_id instead of the name"],
+            help_lines=[
+                "Pass the area_id instead of the name",
+                "Run `ha-axi area list` to see each area's id",
+            ],
             code="AMBIGUOUS_AREA",
         )
     raise NotFound(
@@ -174,6 +179,36 @@ def resolve_area(areas: list, needle: str) -> dict:
         ],
         code="NO_SUCH_AREA",
     )
+
+
+def filter_by_area(rows: list, areas: list, area_filter, scope: list) -> list:
+    """Narrow rows to one area, or to the ones with none.
+
+    Shared by the entity and device listings, which apply the identical rule:
+    `none` selects the unassigned, anything else resolves by id or name.
+    Appends a human-readable phrase to ``scope`` describing what was applied.
+    """
+    if not area_filter:
+        return rows
+    if area_filter.strip().lower() in ("none", "null", ""):
+        scope.append("with no area")
+        return [row for row in rows if not row["area_id"]]
+    area = resolve_area(areas, area_filter)
+    scope.append(f"in area {area.get('name')}")
+    return [row for row in rows if row["area_id"] == area.get("area_id")]
+
+
+def count_line(shown: int, matched: int, total: int, *, filtered: bool) -> str:
+    """The `count:` value for a list view.
+
+    Reports the filtered count against the installation total, so the agent
+    never has to page to find out how much it is not seeing. A filter that
+    happens to match everything still says so, because "did my filter apply?"
+    and "is that all of them?" are different questions.
+    """
+    if filtered:
+        return f"{shown} of {matched} matched ({total} total)"
+    return f"{shown} of {total} total"
 
 
 def matches_search(needle: str, *values) -> bool:

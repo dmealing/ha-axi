@@ -239,3 +239,90 @@ def test_no_command_writes_progress_noise_to_stdout(run_cli, rest_env, capsys):
     assert code == 0
     for line in out.splitlines():
         assert not line.lower().startswith(("fetching", "loading", "connecting"))
+
+
+def test_help_is_not_stolen_from_a_flag_value(run_cli, rest_env, rest_server):
+    """`--help` must obey the same value-consumption rule as every other flag."""
+    rest_server.state["template"] = "ok"
+    code, _ = run_cli(["template", "render", "--template", "--help"], rest_env)
+    assert code == 0
+    posted = [r for r in rest_server.requests if r["path"] == "/api/template"]
+    assert posted[0]["body"] == {"template": "--help"}
+
+
+def test_help_still_works_as_a_flag_in_every_position(run_cli):
+    for argv in (["entity", "--help"], ["entity", "list", "--help"], ["--help", "entity"]):
+        code, out = run_cli(argv, {})
+        assert code == 0, argv
+        assert out.startswith("usage: ha-axi"), argv
+
+
+def test_a_usage_error_honours_json_after_the_subcommand(run_cli):
+    """An agent piping to a parser needs machine output most when it got it wrong."""
+    import json
+
+    code, out = run_cli(["state", "list", "--json", "--bogus", "x"], {})
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["code"] == "UNKNOWN_FLAG"
+    assert "--bogus" in payload["error"]
+
+
+def test_a_usage_error_honours_human_after_the_subcommand(run_cli):
+    code, out = run_cli(["state", "list", "--human", "--bogus", "x"], {})
+    assert code == 2
+    assert "error: unknown flag --bogus" in out
+
+
+def test_timeout_without_a_value_is_rejected_not_swallowed(run_cli, rest_env):
+    for argv in (["--timeout"], ["state", "list", "--timeout"]):
+        code, out = run_cli([*argv], rest_env)
+        assert code == 2, argv
+        assert "--timeout needs a value" in out, argv
+
+
+def test_the_api_command_reports_the_path_it_actually_requested(run_cli, rest_env, rest_server):
+    code, out = run_cli(["api", "config"], rest_env)
+    assert code == 0
+    assert "path: /api/config" in out
+    assert [r["path"] for r in rest_server.requests] == ["/api/config"]
+
+
+def test_ambiguous_and_unknown_lookups_share_one_exit_code(run_cli, ws_env, ws_server):
+    """Both are outcomes of a live lookup, so both exit 1, not one of each."""
+    ws_server.areas.append(
+        {
+            "area_id": "example_room_two",
+            "name": "Example Room",
+            "icon": None,
+            "floor_id": None,
+            "aliases": [],
+        }
+    )
+    ambiguous, out = run_cli(["entity", "list", "--area", "Example Room"], ws_env)
+    assert ambiguous == 1
+    assert "matches more than one area" in out
+
+    unknown, out = run_cli(["entity", "list", "--area", "Nowhere"], ws_env)
+    assert unknown == 1
+    assert "no area with id or name" in out
+
+
+def test_an_unknown_ws_command_is_a_usage_error_from_either_entry_point(run_cli, ws_env):
+    """The command table is static, so both paths report a malformed invocation."""
+    from ha_axi.errors import UsageError
+    from ha_axi.ws import WsClient
+
+    code, out = run_cli(["ws", "nope"], ws_env)
+    assert code == 2
+    assert "unknown websocket command" in out
+
+    with pytest.raises(UsageError) as caught:
+        WsClient.run(object.__new__(WsClient), "nope")
+    assert caught.value.exit_code == 2
+
+
+def test_ws_raw_without_a_command_is_an_error_not_a_listing(run_cli, ws_env):
+    code, out = run_cli(["ws", "--raw"], ws_env)
+    assert code == 2
+    assert "--raw needs an API command type" in out

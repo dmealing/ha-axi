@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from conftest import synthetic_jwt
 from ha_axi import output
 from ha_axi.output import MODE_HUMAN, MODE_JSON, HelpBlock, redact, register_secret, render
 
-# A synthetic JWT, assembled so no complete token literal sits in the source.
-FAKE_JWT = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiJleGFtcGxlIn0" + "." + "c2lnbmF0dXJl"
+# Built at run time; see conftest.synthetic_jwt for why no literal appears here.
+FAKE_JWT = synthetic_jwt()
 
 
 def test_a_registered_token_never_survives_rendering():

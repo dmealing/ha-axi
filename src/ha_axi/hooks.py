@@ -15,12 +15,31 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 MARKER = "ha-axi"
 BINARY_NAMES = ("ha-axi",)
 DEFAULT_TIMEOUT_SECONDS = 10
 OPENCODE_MANAGED_PREFIX = "ha-axi managed opencode plugin:"
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Replace a file's contents in one step.
+
+    These are the user's own global agent settings; a partial write during a
+    crash would leave them with a truncated, unparseable file.
+    """
+    handle, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def portable_command(exec_path: str, path_entries: list | None = None) -> str:
@@ -275,7 +294,7 @@ def _install_json_hook(label: str, path: Path, command: str, timeout: int, repor
             current = {}
         updated, changed = compute_hook_update(current, command, timeout)
         if changed:
-            path.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+            write_atomic(path, json.dumps(updated, indent=2) + "\n")
         return {"target": label, "status": "installed" if changed else "current"}
     except (OSError, json.JSONDecodeError) as exc:
         report["errors"].append(f"{path}: {exc}")
@@ -288,7 +307,7 @@ def _install_codex_features(path: Path, report: dict) -> dict:
         current = path.read_text(encoding="utf-8") if path.exists() else ""
         updated, changed = compute_codex_config_update(current)
         if changed:
-            path.write_text(updated, encoding="utf-8")
+            write_atomic(path, updated)
         return {"target": "codex-features", "status": "installed" if changed else "current"}
     except OSError as exc:
         report["errors"].append(f"{path}: {exc}")
@@ -306,7 +325,7 @@ def _install_opencode(path: Path, command: str, timeout: int, report: dict) -> d
         source = opencode_plugin_source(command, timeout)
         if current == source:
             return {"target": "opencode", "status": "current"}
-        path.write_text(source, encoding="utf-8")
+        write_atomic(path, source)
         return {"target": "opencode", "status": "installed"}
     except OSError as exc:
         report["errors"].append(f"{path}: {exc}")
