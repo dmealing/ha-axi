@@ -130,3 +130,13 @@ Two testing gotchas already paid for:
 
 Supported Pythons are 3.9 through 3.12. `from __future__ import annotations` is what makes the
 `X | None` annotation syntax safe on 3.9 — keep it at the top of every module.
+
+## Releasing
+
+release-please owns the version. `.release-please-manifest.json` records the **last released**
+version, which is not the same thing as the version in `pyproject.toml` and `src/ha_axi/__init__.py`
+— those hold the version a release will *write*. Until the first publish the manifest trails the
+source on purpose: baseline `0.0.0` with source `0.1.0` means "nothing released yet, the next
+`feat:` lands 0.1.0". Do not "fix" that mismatch by raising the baseline to match the source; that
+tells release-please the version is already out and it bumps past it, permanently skipping a version
+number PyPI will never let us reuse.
