@@ -13,8 +13,10 @@ placeholder, so nothing here describes any particular installation.
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
+from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -165,6 +167,62 @@ DEVICE_REGISTRY = [
     },
 ]
 
+#: Every key each modelled WebSocket command accepts, beyond `id` and `type`.
+#:
+#: Declared here rather than imported from ``ha_axi.ws.REGISTRY`` on purpose: a
+#: double that takes its schema from the client can only ever prove the client
+#: agrees with itself. Home Assistant validates each command against a
+#: voluptuous schema that defaults to ``PREVENT_EXTRA``, so an undeclared key
+#: comes back as ``invalid_format`` rather than being quietly ignored -- which
+#: is what makes a wrong wire shape fail a test instead of passing one.
+#:
+#: A parameter added to the client and not to this table will be rejected here.
+#: That is the point: the table is a second opinion, and updating it is how a
+#: new parameter gets confirmed against what the API actually accepts.
+WS_COMMAND_KEYS = {
+    "config/entity_registry/list": (),
+    "config/entity_registry/get": ("entity_id",),
+    "config/entity_registry/update": (
+        "entity_id",
+        "name",
+        "icon",
+        "area_id",
+        "new_entity_id",
+        "disabled_by",
+        "hidden_by",
+        "labels",
+        "aliases",
+    ),
+    "config/area_registry/list": (),
+    "config/area_registry/create": ("name", "icon", "floor_id", "aliases", "labels", "picture"),
+    "config/area_registry/update": (
+        "area_id",
+        "name",
+        "icon",
+        "floor_id",
+        "aliases",
+        "labels",
+        "picture",
+    ),
+    "config/area_registry/delete": ("area_id",),
+    "config/device_registry/list": (),
+    "config/device_registry/update": (
+        "device_id",
+        "name_by_user",
+        "area_id",
+        "disabled_by",
+        "labels",
+    ),
+    "config/floor_registry/list": (),
+    "config/label_registry/list": (),
+    "get_config": (),
+    "get_services": (),
+    "get_states": (),
+}
+
+#: The fields `config/entity_registry/update` writes onto the stored entry.
+ENTITY_UPDATE_FIELDS = ("name", "icon", "area_id", "disabled_by", "hidden_by", "labels", "aliases")
+
 
 # ------------------------------------------------------------------ REST double
 
@@ -299,6 +357,10 @@ class FakeRestServer:
         self._server.server_close()
 
     @property
+    def port(self):
+        return self._server.server_address[1]
+
+    @property
     def url(self):
         host, port = self._server.server_address[:2]
         return f"http://{host}:{port}"
@@ -384,8 +446,30 @@ class FakeWsServer:
             self.fail_next = None
             return {"id": message_id, "type": "result", "success": False, "error": error}
 
+        def fail(code, message):
+            return {
+                "id": message_id,
+                "type": "result",
+                "success": False,
+                "error": {"code": code, "message": message},
+            }
+
         def ok(result):
-            return {"id": message_id, "type": "result", "success": True, "result": result}
+            # Serialized on the way out, as a real instance necessarily is: a
+            # client can never end up holding a reference into server state,
+            # so a test cannot pass because both sides share one object.
+            return {
+                "id": message_id,
+                "type": "result",
+                "success": True,
+                "result": json.loads(json.dumps(result)),
+            }
+
+        allowed = WS_COMMAND_KEYS.get(type_)
+        if allowed is not None:
+            extra = sorted(set(command) - {"id", "type"} - set(allowed))
+            if extra:
+                return fail("invalid_format", f"extra keys not allowed @ data[{extra[0]!r}]")
 
         if type_ == "config/entity_registry/list":
             return ok(self.entities)
@@ -399,28 +483,25 @@ class FakeWsServer:
             for entry in self.entities:
                 if entry["entity_id"] == command.get("entity_id"):
                     return ok(entry)
-            return {
-                "id": message_id,
-                "type": "result",
-                "success": False,
-                "error": {"code": "not_found", "message": "Entity not found"},
-            }
+            return fail("not_found", "Entity not found")
         if type_ == "config/entity_registry/update":
             for entry in self.entities:
                 if entry["entity_id"] != command.get("entity_id"):
                     continue
-                for key in ("name", "area_id", "icon"):
+                for key in ENTITY_UPDATE_FIELDS:
                     if key in command:
                         entry[key] = command[key]
                 if "new_entity_id" in command:
                     entry["entity_id"] = command["new_entity_id"]
+                # Home Assistant answers with the registry entry that now
+                # exists, not with the request that produced it: every stored
+                # field, including the ones the request never mentioned, and an
+                # `area_id` that stays null when the entity's area comes from
+                # its device. A double that echoed the request instead would
+                # let a client report an entity's area from its own payload and
+                # never be contradicted.
                 return ok({"entity_entry": entry})
-            return {
-                "id": message_id,
-                "type": "result",
-                "success": False,
-                "error": {"code": "not_found", "message": "Entity not found"},
-            }
+            return fail("not_found", "Entity not found")
         if type_ == "config/area_registry/create":
             area = {
                 "area_id": command["name"].lower().replace(" ", "_"),
@@ -439,18 +520,8 @@ class FakeWsServer:
                     if key in command:
                         area[key] = command[key]
                 return ok(area)
-            return {
-                "id": message_id,
-                "type": "result",
-                "success": False,
-                "error": {"code": "not_found", "message": "Area not found"},
-            }
-        return {
-            "id": message_id,
-            "type": "result",
-            "success": False,
-            "error": {"code": "unknown_command", "message": f"Unknown command {type_}"},
-        }
+            return fail("not_found", "Area not found")
+        return fail("unknown_command", f"Unknown command {type_}")
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -472,18 +543,121 @@ class FakeWsServer:
 
 
 class FakeInstallation:
-    """Both transports on one base URL, which is what the CLI expects."""
+    """Both transports on one base URL, which is what the CLI expects.
+
+    Home Assistant serves REST and WebSocket from a single origin, and the CLI
+    derives the WebSocket URL from ``HA_URL`` accordingly. The two doubles are
+    separate servers on separate ports, so a command that needs both --
+    ``state list --area``, ``doctor`` -- had no single ``HA_URL`` to run
+    against, and could only be exercised by hand-wiring a Context.
+
+    This restores the real topology with a front door: it reads the request
+    line of each incoming connection and splices the connection to the
+    WebSocket double for ``/api/websocket`` and to the REST double for
+    everything else. Routing on the request line alone means neither double
+    changes and no request body is ever parsed here.
+    """
+
+    WS_PATH = "/api/websocket"
 
     def __init__(self, rest, ws):
         self.rest = rest
         self.ws = ws
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(32)
+        self._closing = threading.Event()
+        self._thread = threading.Thread(target=self._accept_forever, daemon=True)
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._closing.set()
+        with suppress(OSError):
+            # Closing a socket another thread is blocked in accept() on does
+            # not reliably wake it, so knock once and let the loop notice.
+            socket.create_connection(self._listener.getsockname(), timeout=1).close()
+        self._thread.join(timeout=5)
+        with suppress(OSError):
+            self._listener.close()
+
+    @property
+    def url(self):
+        host, port = self._listener.getsockname()[:2]
+        return f"http://{host}:{port}"
 
     @property
     def environ(self):
-        # The CLI derives the WebSocket URL from the base URL, so both doubles
-        # must answer on the same authority. They do not, being separate
-        # servers, so tests that exercise both pass HA_URL per transport.
-        return {"HA_URL": self.rest.url, "HA_TOKEN": FAKE_TOKEN}
+        return {"HA_URL": self.url, "HA_TOKEN": FAKE_TOKEN}
+
+    # -- routing -----------------------------------------------------------
+
+    def _accept_forever(self):
+        while not self._closing.is_set():
+            try:
+                client, _ = self._listener.accept()
+            except OSError:
+                # The listener was closed by stop(); nothing further arrives.
+                return
+            if self._closing.is_set():
+                client.close()
+                return
+            threading.Thread(target=self._route, args=(client,), daemon=True).start()
+
+    def _route(self, client):
+        upstream = None
+        try:
+            head = self._read_request_line(client)
+            if not head:
+                return
+            parts = head.split(" ")
+            path = parts[1].split("?")[0] if len(parts) > 1 else ""
+            port = self.ws.port if path == self.WS_PATH else self.rest.port
+            upstream = socket.create_connection(("127.0.0.1", port))
+            upstream.sendall(head.encode("latin-1"))
+            # One direction per thread, and this one blocks until the upstream
+            # is done, so both sockets close exactly once the exchange ends.
+            back = threading.Thread(target=self._splice, args=(upstream, client), daemon=True)
+            back.start()
+            self._splice(client, upstream)
+            back.join(timeout=5)
+        except OSError:
+            pass
+        finally:
+            for sock in (client, upstream):
+                if sock is not None:
+                    with suppress(OSError):
+                        sock.close()
+
+    @staticmethod
+    def _read_request_line(client) -> str:
+        """Read only the request line, which is all the routing decision needs."""
+        line = b""
+        while not line.endswith(b"\n"):
+            byte = client.recv(1)
+            if not byte or len(line) > 8192:
+                return ""
+            line += byte
+        return line.decode("latin-1")
+
+    @staticmethod
+    def _splice(src, dst) -> None:
+        try:
+            while True:
+                chunk = src.recv(65536)
+                if not chunk:
+                    break
+                dst.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            with suppress(OSError):
+                dst.shutdown(socket.SHUT_WR)
 
 
 @pytest.fixture(autouse=True)
@@ -515,6 +689,23 @@ def rest_env(rest_server):
 @pytest.fixture
 def ws_env(ws_server):
     return {"HA_URL": f"http://127.0.0.1:{ws_server.port}", "HA_TOKEN": FAKE_TOKEN}
+
+
+@pytest.fixture
+def installation(rest_server, ws_server):
+    server = FakeInstallation(rest_server, ws_server).start()
+    yield server
+    server.stop()
+
+
+@pytest.fixture
+def installation_env(installation):
+    """One HA_URL serving REST and WebSocket, as a real instance does.
+
+    Use this for anything that crosses transports; `rest_env` and `ws_env`
+    stay the cheaper choice when only one is in play.
+    """
+    return installation.environ
 
 
 @pytest.fixture

@@ -204,8 +204,34 @@ def _get(ctx, parsed):
     row = _row(entry, area_name_map(areas), device_area_map(devices))
     row["unique_id"] = entry.get("unique_id") or ""
     row["icon"] = entry.get("icon") or ""
-    row["area_source"] = "entity" if entry.get("area_id") else ("device" if row["area_id"] else "")
+    row["area_source"] = _area_source(entry, row["area_id"])
     return {"entity": row}
+
+
+def _area_source(entry: dict, area_id: str) -> str:
+    """Where an entity's effective area came from: itself, its device, or nowhere."""
+    if entry.get("area_id"):
+        return "entity"
+    return "device" if area_id else ""
+
+
+def _resulting_entry(result, current: dict, pending: dict) -> dict:
+    """The registry entry as it stands after an update.
+
+    Home Assistant answers `config/entity_registry/update` with the resulting
+    entry under `entity_entry`. Prefer that, merged over the entry read before
+    the call so a field the response happens to omit is not read as absent; if
+    the response carries no entry at all, apply the pending changes locally.
+    Either way what gets reported is the entity's state, never the request.
+    """
+    entry = dict(current)
+    returned = result.get("entity_entry") if isinstance(result, dict) else None
+    if isinstance(returned, dict):
+        entry.update(returned)
+        return entry
+    for key, value in pending.items():
+        entry["entity_id" if key == "new_entity_id" else key] = value
+    return entry
 
 
 def _update(ctx, parsed):
@@ -244,8 +270,11 @@ def _update(ctx, parsed):
         )
 
     with ctx.ws() as client:
-        entities = client.run("entity.list") or []
-        areas = client.run("area.list") or []
+        # The device registry is read here because an entity with no area of
+        # its own inherits its device's; without it the response would report
+        # an area of "" for an entity that plainly has one, and an agent
+        # reading that would conclude the entity needs reassigning.
+        entities, areas, devices = _snapshot(client)
         current = _find(entities, entity_id)
 
         if clear_area:
@@ -255,25 +284,25 @@ def _update(ctx, parsed):
 
         # Idempotent: a request that asks for the state already stored is a no-op.
         pending = {k: v for k, v in changes.items() if _differs(current, k, v)}
-        if not pending:
-            return {
-                "entity": entity_id,
-                "updated": "already matches the requested values, no change made",
-                "name": registry_name(current),
-                "area": area_name_map(areas).get(current.get("area_id") or "", ""),
-            }
+        if pending:
+            result = client.run("entity.update", {"entity_id": entity_id, **pending})
+            entry = _resulting_entry(result, current, pending)
+            updated: object = sorted(pending)
+        else:
+            entry = current
+            updated = "already matches the requested values, no change made"
 
-        result = client.run("entity.update", {"entity_id": entity_id, **pending})
-
-    entry = (result or {}).get("entity_entry") if isinstance(result, dict) else None
-    entry = entry or current
-    area_names = area_name_map(areas)
+    # Reported through the same row builder `entity get` uses, from the
+    # resulting registry entry rather than from the request, so the two views
+    # cannot disagree about what the entity now is.
+    row = _row(entry, area_name_map(areas), device_area_map(devices))
     return {
-        "entity": entry.get("entity_id", entity_id),
-        "updated": sorted(pending),
-        "name": registry_name(entry),
-        "area": area_names.get(entry.get("area_id") or "", ""),
-        "area_id": entry.get("area_id") or "",
+        "entity": row["entity_id"],
+        "updated": updated,
+        "name": row["name"],
+        "area": row["area"],
+        "area_id": row["area_id"],
+        "area_source": _area_source(entry, row["area_id"]),
     }
 
 
