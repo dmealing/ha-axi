@@ -13,8 +13,8 @@ def test_no_arguments_shows_live_state_not_a_manual(run_cli, rest_env):
     assert code == 0
     assert out.startswith("bin: ")
     assert "description: Agent ergonomic wrapper" in out
-    assert "entities: 4 in 3 domains" in out
-    assert "domains[3]{domain,entities}:" in out
+    assert "entities: 6 in 5 domains" in out
+    assert "domains[5]{domain,entities}:" in out
     assert "help[" in out
 
 
@@ -143,13 +143,13 @@ def test_a_flag_without_its_value_is_a_usage_error(run_cli):
 def test_flags_accept_the_equals_form(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--domain=light"], rest_env)
     assert code == 0
-    assert "count: 2 of 2 matched (4 total)" in out
+    assert "count: 2 of 2 matched (6 total)" in out
 
 
 def test_repeatable_flags_accumulate(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--domain", "light", "--domain", "sensor"], rest_env)
     assert code == 0
-    assert "count: 3 of 3 matched (4 total)" in out
+    assert "count: 3 of 3 matched (6 total)" in out
 
 
 def test_human_mode_renders_a_table(run_cli, rest_env):
@@ -169,7 +169,7 @@ def test_json_mode_emits_parseable_json(run_cli, rest_env):
 
     code, out = run_cli(["--json", "state", "list"], rest_env)
     assert code == 0
-    assert len(json.loads(out)["states"]) == 4
+    assert len(json.loads(out)["states"]) == 6
 
 
 def test_a_global_flag_is_not_stolen_from_a_flag_value(run_cli, rest_env, rest_server):

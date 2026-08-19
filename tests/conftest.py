@@ -47,6 +47,25 @@ def synthetic_jwt() -> str:
 
 # --------------------------------------------------------------- fixture data
 
+#: Capability bits for this synthetic installation.
+#:
+#: Home Assistant publishes the same shape -- one integer mask per entity in its
+#: `supported_features` attribute, and a list of acceptable masks per service in
+#: `target.entity[].supported_features` -- but every value below is invented.
+#: An entity qualifies when it satisfies *any* one mask in the list, which is
+#: how a service with an upstream fallback declares it: `volume_up` accepts
+#: either VOLUME_SET or VOLUME_STEP, so a speaker that steps by setting still
+#: passes.
+FEATURE_TURN_ON = 1
+FEATURE_VOLUME_SET = 2
+FEATURE_VOLUME_STEP = 4
+FEATURE_NEXT_TRACK = 8
+FEATURE_TARGET_TEMPERATURE = 16
+FEATURE_TRANSITION = 32
+
+#: Keys Home Assistant treats as targeting rather than as service data.
+TARGET_KEYS = ("entity_id", "device_id", "area_id", "floor_id", "label_id")
+
 STATES = [
     {
         "entity_id": "light.example_lamp",
@@ -76,17 +95,174 @@ STATES = [
         "last_changed": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
     },
+    {
+        "entity_id": "media_player.example_speaker",
+        "state": "playing",
+        "attributes": {
+            "friendly_name": "Example Speaker",
+            # Volume can be set but not stepped, and the track cannot be
+            # skipped. That is the shape of the capability case worth testing:
+            # `volume_up` still works, through the VOLUME_SET alternative the
+            # service declares, while `media_next_track` genuinely cannot.
+            "supported_features": FEATURE_TURN_ON | FEATURE_VOLUME_SET,
+        },
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+    },
+    {
+        "entity_id": "climate.example_thermostat",
+        "state": "heat",
+        "attributes": {
+            "friendly_name": "Example Thermostat",
+            "supported_features": FEATURE_TARGET_TEMPERATURE,
+            "temperature": 21,
+        },
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+    },
 ]
 
+#: The service model, in the shape `GET /api/services` actually returns.
+#:
+#: Home Assistant builds each description from the integration's
+#: `services.yaml`: `fields` (with `required`, a `selector`, and an optional
+#: `filter.supported_features`), an optional `target` whose entity filter
+#: carries the capability a target must have, and a `response` key that is
+#: present only when the service can answer with a payload -- `optional: false`
+#: meaning it answers with one or not at all.
+#:
+#: Written by hand rather than copied from any installation: every domain and
+#: service name here is part of Home Assistant's public vocabulary, and every
+#: entity, area and capability value is invented.
 SERVICES = [
     {
         "domain": "light",
         "services": {
-            "turn_on": {"name": "Turn on", "fields": {"brightness": {}}},
-            "turn_off": {"name": "Turn off", "fields": {}},
+            "turn_on": {
+                "name": "Turn on",
+                "description": "Turn on one or more lights.",
+                "fields": {
+                    "brightness": {
+                        "description": "Brightness, from 0 to 255.",
+                        "selector": {"number": {"min": 0, "max": 255}},
+                    },
+                    "transition": {
+                        "description": "Seconds to fade over.",
+                        "filter": {"supported_features": [FEATURE_TRANSITION]},
+                        "selector": {"number": {"min": 0, "max": 300}},
+                    },
+                    "advanced_fields": {
+                        "collapsed": True,
+                        "fields": {
+                            "profile": {
+                                "description": "A named light profile.",
+                                "selector": {"text": None},
+                            }
+                        },
+                    },
+                },
+                "target": {"entity": [{"domain": ["light"]}]},
+            },
+            "turn_off": {
+                "name": "Turn off",
+                "description": "Turn off one or more lights.",
+                "fields": {},
+                "target": {"entity": [{"domain": ["light"]}]},
+            },
         },
     },
-    {"domain": "switch", "services": {"toggle": {"name": "Toggle", "fields": {}}}},
+    {
+        "domain": "switch",
+        "services": {
+            "toggle": {
+                "name": "Toggle",
+                "description": "Toggle a switch.",
+                "fields": {},
+                "target": {"entity": [{"domain": ["switch"]}]},
+            }
+        },
+    },
+    {
+        "domain": "media_player",
+        "services": {
+            "media_next_track": {
+                "name": "Next track",
+                "description": "Skip to the next track.",
+                "fields": {},
+                # One acceptable mask, so there is no alternative to fall back
+                # on: an entity without it cannot be reached by this service.
+                "target": {
+                    "entity": [
+                        {"domain": ["media_player"], "supported_features": [FEATURE_NEXT_TRACK]}
+                    ]
+                },
+            },
+            "volume_up": {
+                "name": "Turn up volume",
+                "description": "Turn the volume up.",
+                "fields": {},
+                # Two acceptable masks: Home Assistant backs a player that
+                # cannot step with one that can set, so declaring both is how
+                # the fallback is published.
+                "target": {
+                    "entity": [
+                        {
+                            "domain": ["media_player"],
+                            "supported_features": [FEATURE_VOLUME_SET, FEATURE_VOLUME_STEP],
+                        }
+                    ]
+                },
+            },
+        },
+    },
+    {
+        "domain": "climate",
+        "services": {
+            "set_temperature": {
+                "name": "Set target temperature",
+                "description": "Set the target temperature.",
+                "fields": {
+                    "temperature": {
+                        "description": "The target temperature.",
+                        "filter": {"supported_features": [FEATURE_TARGET_TEMPERATURE]},
+                        "selector": {"number": {"min": 0, "max": 250}},
+                    },
+                    "hvac_mode": {
+                        "description": "The mode to switch to first.",
+                        "selector": {"select": {"options": ["off", "heat", "cool"]}},
+                    },
+                },
+                "target": {
+                    "entity": [
+                        {
+                            "domain": ["climate"],
+                            "supported_features": [FEATURE_TARGET_TEMPERATURE],
+                        }
+                    ]
+                },
+            }
+        },
+    },
+    {
+        "domain": "calendar",
+        "services": {
+            "get_events": {
+                "name": "Get events",
+                "description": "List events in a window.",
+                "fields": {
+                    "start_date_time": {
+                        "required": True,
+                        "description": "The start of the window.",
+                        "selector": {"datetime": None},
+                    }
+                },
+                "target": {"entity": [{"domain": ["calendar"]}]},
+                # Present with `optional: false` means the service answers with
+                # a payload or not at all -- it cannot be called without asking.
+                "response": {"optional": False},
+            }
+        },
+    },
 ]
 
 ENTITY_REGISTRY = [
@@ -129,6 +305,32 @@ ENTITY_REGISTRY = [
         "hidden_by": None,
         "entity_category": "diagnostic",
     },
+    {
+        "entity_id": "media_player.example_speaker",
+        "name": None,
+        "original_name": "Example Speaker",
+        "area_id": "example_hall",
+        "device_id": None,
+        "platform": "example",
+        "unique_id": "unique-four",
+        "icon": None,
+        "disabled_by": None,
+        "hidden_by": None,
+        "entity_category": None,
+    },
+    {
+        "entity_id": "climate.example_thermostat",
+        "name": None,
+        "original_name": "Example Thermostat",
+        "area_id": None,
+        "device_id": None,
+        "platform": "example",
+        "unique_id": "unique-five",
+        "icon": None,
+        "disabled_by": None,
+        "hidden_by": None,
+        "entity_category": None,
+    },
 ]
 
 AREA_REGISTRY = [
@@ -166,6 +368,124 @@ DEVICE_REGISTRY = [
         "model": "Model Y",
     },
 ]
+
+# ------------------------------------------------- the service model, read back
+#
+# These helpers are what the REST double consults to decide whether to refuse a
+# service call. They read `SERVICES` and the registries directly and share no
+# code with `ha_axi.servicemodel`: a double that took its reading of the model
+# from the client could only ever prove the client agrees with itself.
+
+
+def service_description(domain: str, service: str):
+    """The published description of one service, or None if it is not registered."""
+    for entry in SERVICES:
+        if entry["domain"] == domain:
+            return (entry.get("services") or {}).get(service)
+    return None
+
+
+def _walk_fields(description):
+    """Every declared field, with sections flattened as Home Assistant flattens them.
+
+    A section is a display grouping only: its fields arrive in the service data
+    at the top level, exactly like an ungrouped one.
+    """
+    for name, field in (description.get("fields") or {}).items():
+        field = field or {}
+        if "fields" in field:
+            for inner_name, inner in (field["fields"] or {}).items():
+                yield inner_name, (inner or {})
+        else:
+            yield name, field
+
+
+def declared_fields(description) -> dict:
+    return dict(_walk_fields(description))
+
+
+def target_domains(description) -> list:
+    """The entity domains a service publishes that it can be aimed at."""
+    target = description.get("target")
+    if not isinstance(target, dict):
+        return []
+    entries = target.get("entity")
+    if not isinstance(entries, list):
+        return []
+    out = []
+    for entry in entries:
+        declared = (entry or {}).get("domain")
+        if declared is None:
+            return []
+        out.extend([declared] if isinstance(declared, str) else list(declared))
+    return sorted(set(out))
+
+
+def capability_masks(description, domain: str) -> list:
+    """The masks a target entity must satisfy, when the service declares any.
+
+    Only read when the service's entity filter names exactly the service's own
+    domain: a service that targets another domain's entities publishes that
+    domain's capability names, which say nothing about the entity it reaches.
+    """
+    target = description.get("target")
+    if not isinstance(target, dict):
+        return []
+    entries = target.get("entity")
+    if not isinstance(entries, list) or len(entries) != 1:
+        return []
+    entry = entries[0] or {}
+    domains = entry.get("domain")
+    domains = [domains] if isinstance(domains, str) else list(domains or [])
+    if domains != [domain]:
+        return []
+    masks = entry.get("supported_features") or []
+    return [m for m in masks if isinstance(m, int) and not isinstance(m, bool)]
+
+
+def area_of_registry_entry(entry) -> str:
+    """The area an entity sits in, its device's area standing in when it has none."""
+    if entry.get("area_id"):
+        return entry["area_id"]
+    for device in DEVICE_REGISTRY:
+        if device["id"] == entry.get("device_id"):
+            return device.get("area_id") or ""
+    return ""
+
+
+def entities_targeted(body) -> list:
+    """Expand a service call's flat target keys into entity ids, as HA does."""
+    body = body if isinstance(body, dict) else {}
+
+    def listed(key):
+        value = body.get(key)
+        if value is None:
+            return []
+        return list(value) if isinstance(value, list) else [value]
+
+    found = list(listed("entity_id"))
+    areas, devices = listed("area_id"), listed("device_id")
+    if areas or devices:
+        for entry in ENTITY_REGISTRY:
+            if area_of_registry_entry(entry) in areas or entry.get("device_id") in devices:
+                found.append(entry["entity_id"])
+    seen, ordered = set(), []
+    for entity_id in found:
+        if entity_id not in seen:
+            seen.add(entity_id)
+            ordered.append(entity_id)
+    return ordered
+
+
+#: The state a service leaves an entity in, for the few where it is knowable.
+#:
+#: Home Assistant returns the states that actually *changed*, so an entity
+#: already as asked is absent from the answer -- which is precisely why an empty
+#: change set had to stop being the same answer as "nothing was targeted".
+#: Anything not listed here is reported as changed, because the double cannot
+#: know better and guessing the other way would hide a real change.
+RESULTING_STATE = {"turn_on": "on", "turn_off": "off"}
+
 
 #: Every key each modelled WebSocket command accepts, beyond `id` and `type`.
 #:
@@ -317,21 +637,114 @@ class FakeRestServer:
                 if path == "/api/services" and method == "GET":
                     return self._send(200, outer.state["services"])
                 if path.startswith("/api/services/") and method == "POST":
-                    # Home Assistant validates service data under
-                    # vol.Schema(..., extra=vol.PREVENT_EXTRA); a nested
-                    # `target` key is an extra key and is rejected. Mirroring
-                    # that here is what stops a wrong wire shape passing.
-                    if isinstance(body, dict) and "target" in body:
-                        return self._send(
-                            400, {"message": "extra keys not allowed @ data['target']"}
-                        )
-                    result = outer.state["service_result"]
-                    if result is None:
-                        result = [outer.state["states"][0]]
-                    return self._send(200, result)
+                    name = path[len("/api/services/") :].split("/")
+                    if len(name) != 2:
+                        return self._send(404, {"message": "Not found."})
+                    return self._call_service(name[0], name[1], body, urlparse(self.path).query)
                 if path == "/api/template" and method == "POST":
                     return self._send(200, outer.state["template"], content_type="text/plain")
                 return self._send(404, {"message": "Not found."})
+
+            # -- the service call, refusals first -------------------------
+
+            def _bad_request(self):
+                """The empty 400 Home Assistant actually answers with.
+
+                `APIDomainServicesView.post` raises `HTTPBadRequest` from the
+                underlying `ServiceNotFound` or `vol.Invalid`, and aiohttp
+                renders that as a plain-text status line with no JSON body. So
+                the wire carries the status and nothing else: a client that
+                wants to tell the agent *which* service or *which* field was
+                wrong has to read the service model to find out. Answering with
+                a helpful message here would hide exactly that.
+                """
+                return self._send(400, "400: Bad Request", content_type="text/plain")
+
+            def _call_service(self, domain, service, body, query):
+                description = service_description(domain, service)
+                if description is None:
+                    return self._bad_request()
+
+                data = dict(body) if isinstance(body, dict) else {}
+                response = description.get("response")
+                wants_response = "return_response" in query
+                if wants_response and response is None:
+                    return self._send(
+                        400,
+                        {
+                            "message": "Service does not support responses. "
+                            "Remove return_response from request."
+                        },
+                    )
+                if not wants_response and response is not None and not response.get("optional"):
+                    return self._send(
+                        400,
+                        {
+                            "message": "Service call requires responses but caller did not "
+                            "ask for responses. Add ?return_response to query parameters."
+                        },
+                    )
+
+                # Entity service schemas are PREVENT_EXTRA, so a key that is
+                # neither a target nor a declared field is a vol.Invalid -- and
+                # therefore, again, an empty 400. A nested `target` key lands
+                # here: the REST endpoint hands the body straight to the
+                # service and never unwraps one.
+                fields = declared_fields(description)
+                for key in data:
+                    if key not in TARGET_KEYS and key not in fields:
+                        return self._bad_request()
+                for name, field in fields.items():
+                    if field.get("required") and name not in data:
+                        return self._bad_request()
+
+                override = outer.state["service_result"]
+                if override is not None:
+                    return self._send(200, override)
+
+                states = {s["entity_id"]: s for s in outer.state["states"]}
+                masks = capability_masks(description, domain)
+                reaches = target_domains(description) or [domain]
+                fields_sent = {k: v for k, v in data.items() if k not in TARGET_KEYS}
+                changed = []
+                for entity_id in entities_targeted(data):
+                    state = states.get(entity_id)
+                    if state is None or entity_id.split(".", 1)[0] not in reaches:
+                        continue
+                    # Home Assistant skips an unavailable entity in silence,
+                    # and skips one that lacks the capability unless it was
+                    # named outright, in which case it refuses. Both halves
+                    # matter: the silence is what makes an area-targeted call
+                    # indistinguishable from one that had nothing to do.
+                    if state["state"] == "unavailable":
+                        continue
+                    features = (state.get("attributes") or {}).get("supported_features") or 0
+                    if masks and not any(features & mask == mask for mask in masks):
+                        if entity_id in (data.get("entity_id") or []):
+                            # The status is deliberately not the point: ha-axi
+                            # enriches any refusal of a service call, so the
+                            # client must not read meaning into this number.
+                            return self._send(
+                                400,
+                                {
+                                    "message": f"Entity {entity_id} does not support "
+                                    f"service {domain}.{service}."
+                                },
+                            )
+                        continue
+                    # Only a state that actually changes comes back, so a
+                    # service asked for what already holds answers with an
+                    # empty list -- the "nothing to do" half of the pair.
+                    resulting = RESULTING_STATE.get(service)
+                    if resulting is not None and not fields_sent:
+                        if state["state"] == resulting:
+                            continue
+                        state["state"] = resulting
+                    changed.append(state)
+
+                if wants_response:
+                    return self._send(200, {"changed_states": changed, "service_response": None})
+                return self._send(200, changed)
 
             def do_GET(self):
                 self._handle("GET")

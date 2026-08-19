@@ -57,7 +57,13 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   the only runtime dependency.
 - `argspec.py` — per-subcommand flag declarations. Unknown flags are rejected by name with the
   valid ones inlined; `RENAMED` maps plausible wrong guesses to the real flag.
-- `commands/` — one module per noun, each exposing `COMMAND` and `run(ctx, sub, parsed)`.
+- `commands/` — one module per noun, each exposing `COMMAND` and `run(ctx, sub, parsed)`. Adding a
+  noun is one new file plus two lines in `cli.py` (`COMMAND_ORDER` and `_MODULES`); root help,
+  `SKILL.md` and the parametrised test sweeps all derive from those. A `pkgutil` scan would save
+  the two lines, cost static analysis, and still need an explicit order — it has been costed and
+  is not worth it.
+- `servicemodel.py` — a pure reader for what `GET /api/services` publishes. No I/O and no cache:
+  the caller fetches, and decides whether the answer is worth the round-trip.
 
 ### Security invariants — do not regress these
 
@@ -116,12 +122,103 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   area, an ambiguous area name — exits 1. Put a new error on the right side of that line.
 - **`--help` obeys value consumption.** `_help_requested` skips the value of any declared
   value-taking flag, so `template render --template --help` renders the literal.
+- **Home Assistant refuses a service call with an *empty* 400.** `APIDomainServicesView.post`
+  raises `HTTPBadRequest` from the underlying `ServiceNotFound` or `vol.Invalid`, and aiohttp
+  renders the status line with no JSON body. An unknown service, an undeclared field and a missing
+  required one are therefore indistinguishable on the wire. Everything `service call` says about a
+  refusal comes from the model instead, read in `_explain` — which is why that path must never be
+  made to depend on the message text or the status number.
+- **The one message that must never be printed verbatim.** A response-only service refused without
+  `?return_response` comes back with Home Assistant's own wording, naming a query parameter of its
+  REST API that an agent driving this CLI cannot set. `_explain` answers that case *before* it
+  reads the model, because it is knowable without one and the leak must not survive a failed fetch.
+  The flag is `--response`, in both directions.
+- **`supported_features` is published as integers, and the list is a disjunction.** Home Assistant
+  resolves the enum names in `services.yaml` before publishing, and its own rule is
+  `any(features & mask == mask for mask in masks)` — any one mask, but every bit of that one. That
+  disjunction is how an upstream fallback is encoded: `media_player.volume_up` publishes VOLUME_SET
+  *and* VOLUME_STEP because core backs a player that cannot step with one that can set. Reading the
+  list as a conjunction would gate exactly the behaviour that works today, which is the A11 caveat
+  in the maintainer's tool-design guide. `servicemodel.satisfies` is that rule and nothing else.
+- **A capability requirement is only read for the service's own domain.** `reolink.ptz_move`
+  targets `button` entities and names a `camera` feature; checking a button against a camera's bits
+  would refuse every call. `feature_masks` returns nothing unless the published entity filter names
+  exactly the service's own domain, and nothing if a value did not resolve to an integer.
+- **The capability gate is a pre-check for area and device targets only.** Home Assistant refuses
+  an entity *named outright* that lacks the feature, but skips one reached through an area or a
+  device in silence — 200 with an empty list, and nothing said. So the pre-check covers the silent
+  half, and the loud half is enriched on the failure path where it is free. `--no-check` exists
+  because a published requirement is an integration's claim about itself, and a wrong one must not
+  become a wall.
+- **An empty change set is two different answers.** Home Assistant returns the states that actually
+  changed, so `[]` means both "everything was already as asked" and "nothing was reached at all" —
+  and it never says which. `service call` resolves the target when, and only when, the change set
+  is empty and a target was given: reaching nothing exits 1, reaching something exits 0 with the
+  count. Which domains a service can reach is read from its published `target`, never guessed from
+  its name — an integration is free to act on another domain's entities, and several do.
+- **A diagnostic read must not fail a call that worked.** The target report needs the registries,
+  which the REST-only path cannot supply. If that read fails, the report says so and the exit code
+  stays 0: the call itself was accepted, and turning it into an error would be a fresh untruth.
+
+## The command contract
+
+`ha-axi` reaches every service through `service call` and every WebSocket type through `ws --raw`.
+Coverage is already complete, so a typed command is never justified by reach. What the typed
+commands add is judgement, and judgement is the one thing a generator cannot emit — measured:
+Home Assistant's model is complete enough to generate every flag (99% of 1,939 declared fields
+carry a typed selector) and structurally incapable of generating the checks that stop the bugs,
+because the requirement Home Assistant actually *enforces* is the `required_features` argument to
+`async_register_entity_service`, which 79 entity services pass and none export.
+
+Two things are easy to confuse here, and the gate depends on telling them apart. The enforced
+requirement lives in Python and is invisible. A **separate** declaration, `target.entity[]`'s
+`supported_features` in `services.yaml`, *is* published — 91 services in the bundled catalogue carry
+one, `media_player.media_next_track` among them — and Home Assistant resolves it to integers on the
+way out. That published declaration is what the pre-check reads. It normally mirrors the enforced
+one, but it is an integration's claim about itself and the two can disagree, which is the whole
+reason `--no-check` exists.
+
+**Do not generate commands from the service model.** At this scale it would mean 77 nouns and ~327
+subcommands where there are 10 and 19, roughly 30× the `--help` budget, `light turn_on` colliding
+with `service call light.turn_on` for every service, and 19 flags on one subcommand of which 17 are
+conditional on capabilities nothing checks. Consuming the same model to *validate, explain and
+recover* has none of those costs and is what `servicemodel.py` is for.
+
+**The promotion rule.** A service becomes a typed command only when the command would do something
+`service call` cannot — and that something must be named in the PR. In the order to check it:
+
+1. **It crosses transports or registries.** The answer needs the WebSocket registry as well as
+   REST, or needs the device-area fallback. (`state list --area` is the existing instance.)
+2. **It needs a capability check before dispatch,** and Home Assistant publishes no fallback for it.
+3. **It needs a state-aware no-op** — the idempotent "already matches the requested values" answer,
+   which is only possible by reading current state first.
+4. **Its failure needs candidates** from an open, installation-specific set — `source`,
+   `sound_mode`, `effect`, `preset_mode`, `hvac_mode`. These live in the entity's *attributes*
+   (`source_list`, `effect_list`, `hvac_modes`), not in the service schema.
+5. **It needs a shaped result** — a derived summary rather than a change list, the way
+   `entity update` answers with the resulting registry row.
+
+If none of the five applies, it does not get a command: `service call` already covers it, and
+adding one is two spellings for one operation.
+
+**Demotion, and the standing cap.** If a typed command's body reduces to flag-mapping plus a
+request, delete it — the measure is the diff, not the intention. Ten nouns fit in a root help block
+an agent reads in one glance; an eleventh has to argue that it earns its line. `--data key=value`
+stays first-class in every case, because it reaches every field of every service forever with no
+metadata to go stale.
+
+**Never validate an argument against metadata you cannot refresh.** Undeclared flags are rejected by
+name, so stale metadata converts a valid operation into a hard failure with a "valid flags" list
+that is wrong. Either read the model live at the moment you enforce it — as `service call` and
+`service get` do — or do not enforce it and let the value through to Home Assistant, which owns the
+schema. This is also why the model is never cached: an integration added or removed rewrites it and
+nothing signals when.
 
 ## Build, test, lint
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~350 tests, a couple of seconds
+pytest                                   # ~380 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
@@ -146,6 +243,15 @@ green suite. Two rules follow, and neither is optional:
   field, including ones the request never mentioned, and an `area_id` that stays `null` when the
   area belongs to the device. Every result is JSON round-tripped on the way out, so a client can
   never hold a reference into the double's state and pass by sharing an object with it.
+- **Refuse the way Home Assistant refuses, including when that means saying nothing.** The REST
+  double answers an unknown service, an undeclared field and a missing required one with a bare
+  `400` and no body, because that is what `HTTPBadRequest from vol.Invalid` renders. A double that
+  helpfully explained itself would let a client pass that could never explain a real refusal. It
+  also returns only the states that actually *changed*, skips an `unavailable` entity in silence,
+  and skips one lacking a published capability — which is what makes "nothing to do" and "nothing
+  targeted" two testable worlds rather than one string. `SERVICES`, `capability_masks`,
+  `target_domains` and `entities_targeted` in `tests/conftest.py` are that second opinion and are
+  deliberately not imported from `ha_axi.servicemodel`.
 
 Three testing gotchas already paid for:
 
@@ -229,8 +335,10 @@ names.
 
 release-please owns the version. `.release-please-manifest.json` records the **last released**
 version, which is not the same thing as the version in `pyproject.toml` and `src/ha_axi/__init__.py`
-— those hold the version a release will *write*. Until the first publish the manifest trails the
-source on purpose: baseline `0.0.0` with source `0.1.0` means "nothing released yet, the next
-`feat:` lands 0.1.0". Do not "fix" that mismatch by raising the baseline to match the source; that
-tells release-please the version is already out and it bumps past it, permanently skipping a version
+— those hold the version a release will *write*. During bootstrap, before the first publish, the
+manifest deliberately trailed the source: baseline `0.0.0` with source `0.1.0` meant "nothing
+released yet, the next `feat:` lands 0.1.0". That period is over — PyPI hosts 0.1.0 and 0.2.0, and
+the manifest, `pyproject.toml` and `src/ha_axi/__init__.py` all sit at `0.2.0` — but the rule it
+taught still holds: never "fix" a mismatch by raising the baseline to match the source; that tells
+release-please the version is already out and it bumps past it, permanently skipping a version
 number PyPI will never let us reuse.

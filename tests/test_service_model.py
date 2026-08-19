@@ -1,0 +1,450 @@
+"""`service call` and `service get` against Home Assistant's own service model.
+
+Three of the cases here are regressions for defects an architecture review found
+on the `service call` path, all with one root cause: it was the only command
+that sent without ever consulting the model Home Assistant publishes at
+`GET /api/services`.
+
+1. A refused call was a dead end -- `error` and `code`, and no `help[]` block at
+   all, on the most-used mutation path in the tool.
+2. A response-only service leaked Home Assistant's own vocabulary: the agent was
+   told to add a `return_response` query parameter it has no way to set, rather
+   than the `--response` flag it does.
+3. "0 states changed" could not distinguish "nothing to do" from "nothing
+   targeted". A call that reached no entity at all read exactly like one that
+   reached three and found them already as asked.
+
+The REST double models the refusals rather than the successes, so every case
+below fails the way a real instance would: an unknown service and a rejected
+field both come back as an empty 400, because that is all Home Assistant sends.
+"""
+
+from __future__ import annotations
+
+import json
+
+from conftest import FEATURE_NEXT_TRACK, FEATURE_VOLUME_SET
+
+# --------------------------------------------------- defect 1: the dead end
+
+
+def test_a_refused_service_call_names_the_services_that_do_exist(run_cli, rest_env):
+    """Regression: a refused call answered with `error` and `code` and nothing else.
+
+    Home Assistant sends an empty 400 for an unknown service, so the only place
+    the real names can come from is the model -- fetched here, on failure only.
+    """
+    code, out = run_cli(
+        ["service", "call", "light.turn_onn", "--target-entity", "light.example_lamp"],
+        rest_env,
+    )
+    assert code == 1
+    assert "help[" in out, "a refused service call must never be a dead end"
+    assert "light.turn_on" in out
+    assert "ha-axi service list --domain light" in out
+
+
+def test_a_refused_call_on_an_unknown_domain_lists_the_domains(run_cli, rest_env):
+    code, out = run_cli(["service", "call", "lightt.turn_on"], rest_env)
+    assert code == 1
+    assert "no service domain named 'lightt'" in out
+    assert "light" in out
+    assert "ha-axi service list" in out
+
+
+def test_a_field_the_service_does_not_declare_is_named_back(run_cli, rest_env):
+    """The double answers an undeclared key with an empty 400, as PREVENT_EXTRA does.
+
+    Which field was wrong is knowable only from the model, so this is the same
+    enrichment seen from the other side.
+    """
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--data", "brightnes=180"],
+        rest_env,
+    )
+    assert code == 1
+    assert "brightnes" in out
+    assert "brightness" in out
+    assert "ha-axi service get light.turn_on" in out
+
+
+def test_a_missing_required_field_is_named_rather_than_guessed_at(run_cli, rest_env):
+    code, out = run_cli(["service", "call", "calendar.get_events", "--response"], rest_env)
+    assert code == 1
+    assert "start_date_time" in out
+    assert "ha-axi service get calendar.get_events" in out
+
+
+def test_the_enrichment_survives_a_model_that_cannot_be_read(run_cli, rest_env, rest_server):
+    """A failed enrichment must not replace the original error, or drop the help block."""
+    original = rest_server.state["services"]
+    rest_server.state["services"] = "not a list at all"
+    try:
+        code, out = run_cli(["service", "call", "light.turn_onn"], rest_env)
+    finally:
+        rest_server.state["services"] = original
+    assert code == 1
+    assert "HTTP 400" in out
+    assert "help[" in out
+    assert "ha-axi service list" in out
+
+
+# ------------------------------------ defect 2: the leaked upstream vocabulary
+
+
+def test_a_response_only_service_asks_for_the_flag_not_the_query_parameter(run_cli, rest_env):
+    """Regression: the agent was told to add `?return_response`, which it cannot.
+
+    Home Assistant's message names a query parameter of its own REST API. The
+    flag that actually does it is `--response`, and that is what must be said.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        rest_env,
+    )
+    assert code == 1
+    assert "return_response" not in out, "Home Assistant's own vocabulary must not leak"
+    assert "--response" in out
+    assert "ha-axi service call calendar.get_events --response" in out
+
+
+def test_asking_for_a_response_a_service_cannot_give_says_to_drop_the_flag(run_cli, rest_env):
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--target-entity", "light.example_lamp", "--response"],
+        rest_env,
+    )
+    assert code == 1
+    assert "return_response" not in out
+    assert "--response" in out
+    assert "does not return a response" in out
+
+
+# ------------------------------------------ defect 3: 0 states changed, but why
+
+
+def test_an_empty_change_set_says_whether_anything_was_targeted(run_cli, installation_env):
+    """Regression: a call that reached no entity read like one that had nothing to do.
+
+    `example_room` holds a light, so `switch.turn_off` aimed at it resolves to
+    no switch at all. That is not the same answer as "the switch was already
+    off", and reporting exit 0 with the identical sentence is a soft failure.
+    """
+    code, out = run_cli(
+        ["service", "call", "switch.toggle", "--target-area", "example_room"],
+        installation_env,
+    )
+    assert code == 1
+    assert "0 entities" in out
+    assert "example_room" in out
+
+
+def test_an_area_that_does_not_exist_is_reported_rather_than_accepted(run_cli, installation_env):
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--target-area", "nowhere"],
+        installation_env,
+    )
+    assert code == 1
+    assert "no area with id or name 'nowhere'" in out
+    assert "ha-axi area list" in out
+
+
+def test_an_area_name_passed_where_an_id_belongs_is_diagnosed(run_cli, installation_env):
+    """`--target-area` is an area_id; a name silently matches nothing upstream."""
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--target-area", "Example Room"],
+        installation_env,
+    )
+    assert code == 1
+    assert "example_room" in out
+    assert "area name" in out
+
+
+def test_a_target_that_matched_but_changed_nothing_says_so(run_cli, installation_env):
+    """The other world: entities were reached, and none of them changed."""
+    code, out = run_cli(
+        ["service", "call", "light.turn_off", "--target-entity", "light.example_ceiling"],
+        installation_env,
+    )
+    assert code == 0
+    assert "0 states changed" in out
+    assert "matched 1 entity" in out
+
+
+def test_an_unavailable_entity_is_named_rather_than_silently_skipped(run_cli, installation_env):
+    """Home Assistant skips an unavailable entity without a word about it."""
+    code, out = run_cli(
+        ["service", "call", "switch.toggle", "--target-entity", "switch.example_outlet"],
+        installation_env,
+    )
+    assert code == 0
+    assert "unavailable" in out
+
+
+def test_an_entity_that_does_not_exist_is_not_reported_as_success(run_cli, installation_env):
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--target-entity", "light.absent"],
+        installation_env,
+    )
+    assert code == 1
+    assert "light.absent" in out
+
+
+def test_a_call_that_changed_something_pays_for_no_extra_reads(
+    run_cli, installation_env, rest_server
+):
+    """The happy path stays one request: no model, no registry, no state sweep."""
+    code, out = run_cli(
+        ["service", "call", "light.turn_off", "--target-entity", "light.example_lamp"],
+        installation_env,
+    )
+    assert code == 0
+    assert "changed[1]{entity_id,name,state}:" in out
+    paths = [r["path"] for r in rest_server.requests]
+    assert paths == ["/api/services/light/turn_off"]
+
+
+# ------------------------------------------------ enrichment: `service get`
+
+
+def test_service_get_renders_one_service_field_table_live(run_cli, rest_env):
+    code, out = run_cli(["service", "get", "light.turn_on"], rest_env)
+    assert code == 0
+    assert "service: light.turn_on" in out
+    assert "name: Turn on" in out
+    assert "fields[3]{field,required,type,description}:" in out
+    assert "brightness,false,number," in out
+    assert "ha-axi service call light.turn_on" in out
+
+
+def test_service_get_flattens_a_section_the_way_a_call_does(run_cli, rest_env):
+    """A section is a display grouping; its fields go in the data flat."""
+    code, out = run_cli(["service", "get", "light.turn_on", "--fields", "field,section"], rest_env)
+    assert code == 0
+    assert "profile,advanced_fields" in out
+    assert "advanced_fields,advanced_fields" not in out
+
+
+def test_service_get_reports_the_capability_a_target_must_have(run_cli, rest_env):
+    code, out = run_cli(["service", "get", "media_player.media_next_track"], rest_env)
+    assert code == 0
+    assert f"{FEATURE_NEXT_TRACK}" in out
+    assert "supported_features" in out
+
+
+def test_service_get_reports_the_response_mode(run_cli, rest_env):
+    _, out = run_cli(["service", "get", "calendar.get_events"], rest_env)
+    assert "response: required" in out
+    assert "--response" in out
+    _, out = run_cli(["service", "get", "light.turn_on"], rest_env)
+    assert "response: none" in out
+
+
+def test_service_get_states_an_empty_field_list_definitively(run_cli, rest_env):
+    code, out = run_cli(["service", "get", "light.turn_off"], rest_env)
+    assert code == 0
+    assert "fields: 0 fields declared on light.turn_off" in out
+
+
+def test_service_get_rejects_an_unknown_service_with_the_near_misses(run_cli, rest_env):
+    code, out = run_cli(["service", "get", "light.turn_onn"], rest_env)
+    assert code == 1
+    assert "light.turn_on" in out
+    assert "ha-axi service list --domain light" in out
+
+
+def test_service_get_rejects_a_malformed_name_as_a_usage_error(run_cli, rest_env):
+    code, out = run_cli(["service", "get", "turn_on"], rest_env)
+    assert code == 2
+    assert "expected <domain>.<service>" in out
+
+
+def test_service_get_is_json_renderable(run_cli, rest_env):
+    code, out = run_cli(["--json", "service", "get", "light.turn_on"], rest_env)
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["service"] == "light.turn_on"
+    assert [row["field"] for row in doc["fields"]] == ["brightness", "transition", "profile"]
+
+
+# ------------------------------------------- enrichment: the capability gate
+
+
+def test_a_capability_the_target_cannot_have_is_refused_before_dispatch(
+    run_cli, installation_env, rest_server
+):
+    """The A11 case: skipping a track on a player that cannot skip.
+
+    Home Assistant reaches area-resolved entities and silently drops the ones
+    without the feature, so the call returns 200 with an empty list and the
+    agent learns nothing. The requirement is published, so it can be read first.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "media_player.media_next_track",
+            "--target-area",
+            "example_hall",
+        ],
+        installation_env,
+    )
+    assert code == 1
+    assert "media_player.example_speaker" in out
+    assert "supported_features" in out
+    assert "ha-axi service get media_player.media_next_track" in out
+    assert "/api/services/media_player/media_next_track" not in [
+        r["path"] for r in rest_server.requests
+    ], "a call the installation cannot serve must not be sent"
+
+
+def test_a_service_with_an_upstream_fallback_is_not_gated(run_cli, installation_env):
+    """The caveat that keeps the gate honest.
+
+    `volume_up` publishes two acceptable capabilities because Home Assistant
+    backs a player that cannot step with one that can set. The speaker has the
+    second, so the call must go through -- gating it would break behaviour that
+    works today.
+    """
+    code, out = run_cli(
+        ["service", "call", "media_player.volume_up", "--target-area", "example_hall"],
+        installation_env,
+    )
+    assert code == 0
+    assert "media_player.example_speaker" in out
+
+
+def test_the_capability_gate_can_be_skipped(run_cli, installation_env, rest_server):
+    """An integration whose published requirement is wrong must not be a wall."""
+    code, _ = run_cli(
+        [
+            "service",
+            "call",
+            "media_player.media_next_track",
+            "--target-area",
+            "example_hall",
+            "--no-check",
+        ],
+        installation_env,
+    )
+    assert code == 0
+    assert "/api/services/media_player/media_next_track" in [
+        r["path"] for r in rest_server.requests
+    ]
+
+
+def test_an_explicit_entity_target_is_not_pre_checked(run_cli, installation_env, rest_server):
+    """Home Assistant refuses a named entity loudly, so the check would only cost.
+
+    The call goes out, comes back refused, and the refusal is enriched from the
+    same model -- on the failure path, where it is free.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "media_player.media_next_track",
+            "--target-entity",
+            "media_player.example_speaker",
+        ],
+        installation_env,
+    )
+    assert code == 1
+    assert "/api/services/media_player/media_next_track" in [
+        r["path"] for r in rest_server.requests
+    ]
+    assert "supported_features" in out
+    assert f"{FEATURE_VOLUME_SET}" in out
+
+
+def test_a_service_with_no_capability_requirement_reads_no_states(
+    run_cli, installation_env, rest_server
+):
+    """The gate costs one model read and stops there when nothing is gated."""
+    code, _ = run_cli(
+        ["service", "call", "light.turn_off", "--target-area", "example_room"],
+        installation_env,
+    )
+    assert code == 0
+    paths = [r["path"] for r in rest_server.requests]
+    assert paths.count("/api/states") == 0
+    assert "/api/services" in paths
+
+
+def test_a_target_that_cannot_be_resolved_does_not_fail_a_call_that_worked(
+    run_cli, rest_env, rest_server
+):
+    """The registries answer the follow-up question, not the call itself.
+
+    `rest_env` serves REST and nothing else, so resolving an area target is
+    impossible. The call still went out and Home Assistant still accepted it, so
+    the report says what it could not read rather than inventing a failure.
+    """
+    rest_server.state["service_result"] = []
+    code, out = run_cli(
+        ["service", "call", "light.turn_off", "--target-area", "example_room"],
+        rest_env,
+    )
+    assert code == 0
+    assert "0 states changed" in out
+    assert "could not be resolved" in out
+
+
+def test_a_name_too_far_off_gets_a_listing_rather_than_a_wrong_guess(run_cli, rest_env):
+    """`did you mean` has to mean it; the rest of the domain is a separate sentence."""
+    code, out = run_cli(["service", "call", "light.zzzzzz"], rest_env)
+    assert code == 1
+    assert "did you mean" not in out
+    assert "ha-axi service list --domain light" in out
+
+
+# ------------------------------------------------------- the model reader
+
+
+def test_feature_masks_are_read_only_for_the_service_own_domain():
+    """An integration acting on another domain's entities publishes that domain's names.
+
+    `reolink.ptz_move` targets `button` entities and names a `camera` feature.
+    Checking a button against a camera's bits would refuse every call.
+    """
+    from ha_axi import servicemodel
+
+    same = {"target": {"entity": [{"domain": ["media_player"], "supported_features": [8]}]}}
+    assert servicemodel.feature_masks(same, "media_player") == [8]
+    assert servicemodel.feature_masks(same, "reolink") == []
+
+    cross = {"target": {"entity": [{"domain": ["button"], "supported_features": [512]}]}}
+    assert servicemodel.feature_masks(cross, "reolink") == []
+
+
+def test_a_capability_that_did_not_resolve_to_a_number_disables_the_gate():
+    """Home Assistant resolves the enum names before publishing; anything else is unknown."""
+    from ha_axi import servicemodel
+
+    spec = {"target": {"entity": [{"domain": ["fan"], "supported_features": ["fan.SET_SPEED"]}]}}
+    assert servicemodel.feature_masks(spec, "fan") == []
+
+
+def test_satisfies_treats_the_mask_list_as_alternatives_and_each_mask_as_a_whole():
+    """Home Assistant's own rule: any one mask, but every bit of that one."""
+    from ha_axi import servicemodel
+
+    assert servicemodel.satisfies(0b0010, [0b0010, 0b0100]) is True
+    assert servicemodel.satisfies(0b0001, [0b0010, 0b0100]) is False
+    # A mask of two bits is a conjunction: half of it is not enough.
+    assert servicemodel.satisfies(0b0010, [0b0110]) is False
+    assert servicemodel.satisfies(0b0110, [0b0110]) is True
+    assert servicemodel.satisfies(0, []) is True
+
+
+def test_target_domains_is_empty_when_the_service_publishes_no_restriction():
+    from ha_axi import servicemodel
+
+    assert servicemodel.target_domains({}) == []
+    assert servicemodel.target_domains({"target": {"entity": [{}]}}) == []
+    assert servicemodel.target_domains({"target": {"entity": [{"domain": "light"}]}}) == ["light"]

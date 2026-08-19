@@ -17,7 +17,7 @@ from conftest import FAKE_TOKEN
 def test_entity_list_resolves_area_names_in_the_default_view(run_cli, ws_env):
     code, out = run_cli(["entity", "list"], ws_env)
     assert code == 0
-    assert "entities[3]{entity_id,name,area}:" in out
+    assert "entities[5]{entity_id,name,area}:" in out
     assert "light.example_lamp,Example Lamp,Example Room" in out
 
 
@@ -58,7 +58,7 @@ def test_entity_list_filters_by_domain_and_platform_and_search(run_cli, ws_env):
     _, out = run_cli(["entity", "list", "--domain", "sensor"], ws_env)
     assert "sensor.example_temperature" in out and "light.example_lamp" not in out
     _, out = run_cli(["entity", "list", "--platform", "demo"], ws_env)
-    assert "count: 3 of 3 matched (3 total)" in out
+    assert "count: 3 of 3 matched (5 total)" in out
     _, out = run_cli(["entity", "list", "--search", "lamp"], ws_env)
     assert "light.example_lamp" in out and "sensor.example" not in out
 
@@ -275,7 +275,7 @@ def test_area_list_counts_entities_including_device_inheritance(run_cli, ws_env)
     code, out = run_cli(["area", "list"], ws_env)
     assert code == 0
     assert "areas[2]{area_id,name,entities,devices,floor_id}:" in out
-    assert "example_hall,Example Hall,1,1,ground" in out
+    assert "example_hall,Example Hall,2,1,ground" in out
     assert "example_room,Example Room,1,1," in out
 
 
@@ -442,7 +442,7 @@ def test_writing_to_a_closed_connection_is_a_structured_failure(ws_env, ws_serve
     ws_server.close_after = 1
     ctx = Context(ws_env)
     with ctx.ws() as client:
-        assert len(client.run("entity.list")) == 3
+        assert len(client.run("entity.list")) == 5
         # Give the client's reader time to observe the reset, so the write is
         # the first operation to touch the dead socket.
         time.sleep(0.1)

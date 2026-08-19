@@ -53,17 +53,20 @@ ha-axi state get media_player.example_speaker --full
 
 ### `ha-axi service`
 
-List Home Assistant services and call them.
+List Home Assistant services, read one's fields, and call them.
 
 ```sh
 ha-axi service list
 ha-axi service list --domain light
+ha-axi service get light.turn_on
 ha-axi service call light.turn_on --target-entity light.example_lamp
 ha-axi service call light.turn_on --target-area example_room --data brightness=180
 ha-axi service call climate.set_temperature --target-entity climate.example_thermostat --data-json '{"temperature": 21}'
 ```
 
 - --data-json takes a whole JSON object; --data takes repeated key=value pairs
+- a refused call is explained from `/api/services`, which is read on failure only
+- --target-area and --target-device pre-check the published capability, because Home Assistant drops an entity that lacks it without saying so
 
 ### `ha-axi template`
 

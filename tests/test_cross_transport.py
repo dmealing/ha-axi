@@ -15,7 +15,7 @@ def test_state_list_filters_by_area_name(run_cli, installation_env):
     assert code == 0
     assert "light.example_lamp,Example Lamp,on" in out
     assert "light.example_ceiling" not in out
-    assert "count: 1 of 1 matched (4 total)" in out
+    assert "count: 1 of 1 matched (6 total)" in out
 
 
 def test_state_list_filters_by_area_id_as_well_as_by_name(run_cli, installation_env):
@@ -52,7 +52,7 @@ def test_state_list_area_combines_with_the_other_filters(run_cli, installation_e
     )
     assert code == 0
     assert "light.example_ceiling" in out
-    assert "count: 1 of 1 matched (4 total)" in out
+    assert "count: 1 of 1 matched (6 total)" in out
 
     code, out = run_cli(
         ["state", "list", "--area", "Example Room", "--domain", "sensor"], installation_env
@@ -91,7 +91,10 @@ def test_state_list_area_is_reported_in_json_mode_too(run_cli, installation_env)
     code, out = run_cli(["--json", "state", "list", "--area", "example_hall"], installation_env)
     assert code == 0
     doc = json.loads(out)
-    assert [row["entity_id"] for row in doc["states"]] == ["light.example_ceiling"]
+    assert [row["entity_id"] for row in doc["states"]] == [
+        "light.example_ceiling",
+        "media_player.example_speaker",
+    ]
 
 
 def test_doctor_is_healthy_when_both_transports_answer(run_cli, installation_env):
@@ -100,7 +103,7 @@ def test_doctor_is_healthy_when_both_transports_answer(run_cli, installation_env
     assert "healthy: true" in out
     assert "environment,ok" in out
     assert "rest,ok" in out
-    assert 'websocket,ok,"authenticated, 3 registry entries in 2 areas"' in out
+    assert 'websocket,ok,"authenticated, 5 registry entries in 2 areas"' in out
     assert "version: 2026.1.0" in out
 
 
