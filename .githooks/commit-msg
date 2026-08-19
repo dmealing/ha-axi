@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Block a commit message that would publish installation-specific data.
+#
+# File content and commit messages are separate channels; --staged only covers
+# the former, and a message is just as public.
+set -e
+
+root=$(git rev-parse --show-toplevel)
+python=$(command -v python3 || command -v python || true)
+
+if [ -z "$python" ]; then
+  echo "commit-msg: no python interpreter found; cannot run the leak check" >&2
+  exit 1
+fi
+
+"$python" "$root/scripts/leakcheck.py" --commit-msg "$1"

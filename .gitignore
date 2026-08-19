@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Agent-local settings, which routinely contain absolute home paths. Keeping
+# this out of .git/info/exclude matters: that file is local to one clone and
+# never travels with the repository.
+.claude/
+.codex/

@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# Block a commit that would publish installation-specific data.
+#
+# Install with: scripts/install-hooks.sh
+# The same scan runs in CI, so bypassing this hook only delays the failure.
+set -e
+
+root=$(git rev-parse --show-toplevel)
+python=$(command -v python3 || command -v python || true)
+
+if [ -z "$python" ]; then
+  echo "pre-commit: no python interpreter found; cannot run the leak check" >&2
+  echo "pre-commit: install python3, or run the scan manually before pushing" >&2
+  exit 1
+fi
+
+"$python" "$root/scripts/leakcheck.py" --staged --root "$root"
