@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/dmealing/ha-axi/compare/v0.2.0...v0.3.0) (2026-08-19)
+
+
+### Features
+
+* **service:** explain refusals, add service get, pre-check capabilities ([#7](https://github.com/dmealing/ha-axi/issues/7)) ([05a6cb0](https://github.com/dmealing/ha-axi/commit/05a6cb08449dcde05aaf5eb1f02ebd249e836666))
+
 ## [0.2.0](https://github.com/dmealing/ha-axi/compare/v0.1.0...v0.2.0) (2026-08-19)
 
 
