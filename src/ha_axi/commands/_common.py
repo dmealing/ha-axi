@@ -184,8 +184,8 @@ def resolve_area(areas: list, needle: str) -> dict:
 def filter_by_area(rows: list, areas: list, area_filter, scope: list) -> list:
     """Narrow rows to one area, or to the ones with none.
 
-    Shared by the entity and device listings, which apply the identical rule:
-    `none` selects the unassigned, anything else resolves by id or name.
+    Shared by the entity, device and state listings, which apply the identical
+    rule: `none` selects the unassigned, anything else resolves by id or name.
     Appends a human-readable phrase to ``scope`` describing what was applied.
     """
     if not area_filter:

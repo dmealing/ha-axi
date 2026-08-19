@@ -86,19 +86,21 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 - **`entity_id` is not stable identity.** Filter by area or search; do not infer meaning from an id.
 - **An entity with no `area_id` inherits its device's area.** Any per-area count or filter that
   ignores the device fallback will be wrong.
-- **Every view that reports an area builds it with `_row()`.** `effective_area_id` lives there and
-  nowhere else, so a view that reads `entry["area_id"]` directly reports `""` for an entity whose
-  area comes from its device. `entity update` did exactly that: it answered from the update payload
-  and the pre-update entry, without ever reading the device registry, so a rename of a
+- **Every view that reports an entity's area builds it with `_row()`.** `effective_area_id` is
+  applied there; its other call sites (`state list --area`'s filter, `area list`'s counts) never
+  print a per-entity area. A view that reads `entry["area_id"]` directly reports `""` for an entity
+  whose area comes from its device. `entity update` did exactly that: it answered from the update
+  payload and the pre-update entry, without ever reading the device registry, so a rename of a
   device-placed entity replied `area: ""` while `entity get` on the same entity said otherwise. The
   data was never damaged — but an agent reads the update response, and an empty area there reads as
   "unassigned". Update and get now share `_row()` and both carry `area_source`.
 - **`state` (REST) and `entity` (WebSocket) are different views.** Names and areas exist only in the
   registry; states exist only over REST. `state list --area` therefore reads the registry over the
-  WebSocket — the one command that crosses transports — and pays that round-trip only when the flag
-  is passed. The flag exists because an agent that learns `--area` on `entity list` will reach for
-  it on `state list`; a filter is not the same as importing registry columns into the runtime view,
-  which is why `area` is still not a `state list --fields` choice.
+  WebSocket — the only data command that crosses transports; `doctor` uses both too, but only to
+  check them — and pays that round-trip only when the flag is passed. The flag exists because an
+  agent that learns `--area` on `entity list` will reach for it on `state list`; a filter is not
+  the same as importing registry columns into the runtime view, which is why `area` is still not a
+  `state list --fields` choice.
 - **Adding a WebSocket command** is one entry in `REGISTRY` in `src/ha_axi/ws.py`. It becomes
   reachable through `ha-axi ws <name>` immediately; a typed subcommand is optional on top.
 - **`--json` is the global output mode.** Command flags carrying JSON payloads are named
