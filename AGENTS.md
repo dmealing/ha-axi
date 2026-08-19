@@ -179,7 +179,7 @@ one, but it is an integration's claim about itself and the two can disagree, whi
 reason `--no-check` exists.
 
 **Do not generate commands from the service model.** At this scale it would mean 77 nouns and ~327
-subcommands where there are 10 and 18, roughly 30× the `--help` budget, `light turn_on` colliding
+subcommands where there are 10 and 19, roughly 30× the `--help` budget, `light turn_on` colliding
 with `service call light.turn_on` for every service, and 19 flags on one subcommand of which 17 are
 conditional on capabilities nothing checks. Consuming the same model to *validate, explain and
 recover* has none of those costs and is what `servicemodel.py` is for.
@@ -218,7 +218,7 @@ nothing signals when.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~350 tests, a couple of seconds
+pytest                                   # ~380 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
