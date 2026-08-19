@@ -108,7 +108,7 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~240 tests, about 1.5s
+pytest                                   # ~330 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
