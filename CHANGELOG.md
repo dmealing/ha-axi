@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/dmealing/ha-axi/compare/v0.1.0...v0.2.0) (2026-08-19)
+
+
+### Features
+
+* report real areas from entity update and add --area to state list ([#5](https://github.com/dmealing/ha-axi/issues/5)) ([13423c1](https://github.com/dmealing/ha-axi/commit/13423c15050011e3ac8a7aecfc056940ef284e81))
+
 ## 0.1.0 (2026-08-19)
 
 
