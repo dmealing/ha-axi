@@ -335,8 +335,10 @@ names.
 
 release-please owns the version. `.release-please-manifest.json` records the **last released**
 version, which is not the same thing as the version in `pyproject.toml` and `src/ha_axi/__init__.py`
-— those hold the version a release will *write*. Until the first publish the manifest trails the
-source on purpose: baseline `0.0.0` with source `0.1.0` means "nothing released yet, the next
-`feat:` lands 0.1.0". Do not "fix" that mismatch by raising the baseline to match the source; that
-tells release-please the version is already out and it bumps past it, permanently skipping a version
+— those hold the version a release will *write*. During bootstrap, before the first publish, the
+manifest deliberately trailed the source: baseline `0.0.0` with source `0.1.0` meant "nothing
+released yet, the next `feat:` lands 0.1.0". That period is over — PyPI hosts 0.1.0 and 0.2.0, and
+the manifest, `pyproject.toml` and `src/ha_axi/__init__.py` all sit at `0.2.0` — but the rule it
+taught still holds: never "fix" a mismatch by raising the baseline to match the source; that tells
+release-please the version is already out and it bumps past it, permanently skipping a version
 number PyPI will never let us reuse.
