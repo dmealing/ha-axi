@@ -271,6 +271,20 @@ practice. The doubles implement the documented protocol and enforce the parts of
 (the REST double rejects a nested service-call `target` the way Home Assistant does), so they verify
 this client against the specification rather than against a particular server build.
 
+## Continuous integration
+
+| Workflow | Runner | Triggers | What runs |
+| --- | --- | --- | --- |
+| `ci.yml` | self-hosted | push to `main`, nightly, manual | leak scan, lint, `pytest` on 3.9–3.12, generated-skill check |
+| `hygiene.yml` | `ubuntu-latest` | `pull_request` | the leak scan |
+| `release.yml` | `ubuntu-latest` | push to `main`, manual | release-please, and the OIDC publish when a release PR merges |
+
+A pull request therefore shows **one** hosted check, and that is deliberate. The leak scan is the
+gate that has to run before a human reads a diff; everything heavier runs on the maintainer's own
+machine, where the full matrix is free and does not queue behind anyone. `ci.yml` never
+triggers on `pull_request` and must not start to — this repository is public and that runner is a
+personal workstation, so a pull-request trigger would give any contributor code execution on it.
+
 ## Releasing
 
 Version bumps and the changelog are driven from conventional commits by

@@ -1,9 +1,41 @@
-name: ci
+# Local CI — the heavy validation matrix, on the maintainer's self-hosted runner.
+#
+# SECURITY (public repository + self-hosted runner): this workflow must NEVER
+# gain a `pull_request` trigger. The runner is the maintainer's own workstation,
+# and a job on it executes repository code as a real user with that user's files
+# and network. Every trigger below is reachable only by someone who already has
+# write access — a push to `main`, the schedule, or a manual dispatch — so
+# fork-submitted code cannot reach the machine. `pull_request` would hand any
+# contributor on the internet code execution on it, in one line and with no
+# other visible symptom. Add coverage for pull requests in `hygiene.yml`, which
+# is GitHub-hosted, or not at all.
+#
+# WHERE VALIDATION ACTUALLY HAPPENS: every change here goes through the local
+# no-mistakes gate — review, tests, lint, docs — before a PR is ever opened.
+# GitHub-hosted CI is not the primary quality signal for this repository and
+# should not be treated as one, which is why a pull request shows a single cheap
+# check (the leak scan, the one gate that must run before a human reads a diff)
+# rather than a matrix. This workflow is the full matrix; it runs on `main`,
+# nightly, and on demand.
+#
+# It also replaces a genuinely wasteful arrangement: this file used to trigger on
+# both `push: branches: ["**"]` and `pull_request`, so every PR branch ran the
+# whole matrix twice against identical commits. One copy went green while its
+# twin sat queued for over an hour, leaving the PR permanently "unstable".
+#
+# The filename stays `ci.yml` on purpose. `workflow_dispatch` resolves a workflow
+# only if the file is already on the default branch, so a renamed file could not
+# have been dispatched on its own branch — and this workflow was verified end to
+# end on the runner before it merged, which is the whole point of it.
+name: ci (self-hosted)
 
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches: [main]
+  # Nightly. Deliberately not 08:17 UTC: a sibling project's self-hosted
+  # workflow holds that slot on the same workstation.
+  schedule:
+    - cron: '41 9 * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,9 +48,14 @@ concurrency:
 jobs:
   leakcheck:
     name: leak check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The workspace on a self-hosted runner outlives the job; do not leave
+          # a credential behind in its .git/config.
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -28,44 +65,91 @@ jobs:
       - name: Scan every tracked file
         run: python3 scripts/leakcheck.py
 
+  # EVERY job that needs third-party packages installs into a fresh `.venv` and
+  # calls the tools by path out of it. That is not ceremony. This runner runs as
+  # the maintainer's own user, so `~/.local/lib/python3.X/site-packages` and
+  # `~/.local/bin` are on the interpreter's path and ahead of it on `PATH` — a
+  # bare `pytest`, `ruff` or `ha-axi` resolves to whatever the maintainer happens
+  # to have installed, against `/usr/bin/python3.X` rather than the interpreter
+  # this job set up. First run of this workflow proved it in both directions:
+  # py3.9 and py3.12 passed (no user site exists for those versions) while py3.10
+  # and py3.11 died with `ModuleNotFoundError: No module named 'ha_axi'`, and the
+  # lint and skill jobs went green having run the maintainer's own binaries
+  # against the maintainer's own checkout. A venv excludes the user site by
+  # construction, so a job sees only what it just installed.
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
-      - run: ruff check .
-      - run: ruff format --check .
+      # --clear because the workspace outlives the job on a self-hosted runner.
+      - run: python -m venv --clear .venv
+      - run: .venv/bin/python -m pip install --upgrade pip
+      - run: .venv/bin/pip install -e ".[dev]"
+      - run: .venv/bin/ruff check .
+      - run: .venv/bin/ruff format --check .
 
   test:
     name: test (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The runner's host provides only some of these; setup-python downloads
+      # the rest into the persistent tool cache, so only the first run pays.
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
-      - run: pytest
+      - run: python -m venv --clear .venv
+      - run: .venv/bin/python -m pip install --upgrade pip
+      - run: .venv/bin/pip install -e ".[dev]"
+      - run: .venv/bin/pytest
 
   skill:
     name: skill is current
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
-      # The committed skill is generated from the CLI's own command table.
-      - run: ha-axi setup skill --check
+      - run: python -m venv --clear .venv
+      - run: .venv/bin/python -m pip install --upgrade pip
+      - run: .venv/bin/pip install -e ".[dev]"
+      # The committed skill is generated from the CLI's own command table — from
+      # THIS checkout's, which is why it is the venv's `ha-axi` and not `PATH`'s.
+      - run: .venv/bin/ha-axi setup skill --check
+
+  # Nothing watches a workflow that runs on main and overnight, so a failure has
+  # to come and find someone.
+  notify:
+    needs: [leakcheck, lint, test, skill]
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 5
+    steps:
+      - env:
+          # env-indirection: a commit message is untrusted text and must never be
+          # interpolated with ${{ }} directly into a script body.
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+          notify-send -u critical "ci FAILED: ha-axi" \
+            "$(printf '%s' "$HEAD_MSG" | head -n1)
+          $RUN_URL" || echo "notify-send unavailable; GitHub email still fires"
