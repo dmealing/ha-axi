@@ -87,7 +87,7 @@ help[4]:
 | Command | Transport | What it does |
 | --- | --- | --- |
 | `ha-axi state list\|get` | REST | Entity states and attributes as they are right now (`--area` also reads the registry) |
-| `ha-axi service list\|call` | REST | Discover services and call them |
+| `ha-axi service list\|get\|call` | REST | Discover services, read one's fields, and call them |
 | `ha-axi template render` | REST | Render a Jinja template server-side |
 | `ha-axi entity list\|get\|update` | WebSocket | The entity registry: names, areas, platforms |
 | `ha-axi area list\|get\|create\|update` | WebSocket | The area registry |
@@ -106,8 +106,40 @@ ha-axi entity list --area 'Example Room' --fields entity_id,name,area,platform
 ha-axi entity update light.example_lamp --name 'Reading Lamp' --area example_room
 ha-axi area create --name 'Example Study'
 ha-axi service call light.turn_on --target-entity light.example_lamp --data brightness=180
+ha-axi service get climate.set_temperature
 ha-axi template render --template '{{ states("light.example_lamp") }}'
 ```
+
+### Calling a service, and being told why not
+
+Home Assistant publishes its whole service model at `GET /api/services`: every service, its fields,
+which are required, whether it answers with a response payload, and the capability a target entity
+must have. `ha-axi` does **not** turn that into commands — that would be 327 subcommands wrapping
+one that already reaches all of them, each firing at a device without asking whether it can do the
+thing. It reads the model in three narrow places instead:
+
+- **On a refused call.** A refusal from Home Assistant is an empty `400`: the status and no body, so
+  an unknown service, an undeclared field and a missing required one look identical on the wire.
+  `ha-axi` fetches the model at that point and answers with the real service names, the field it
+  does not accept, the field it needs, or the `--response` flag it was missing. A call that
+  succeeds pays for none of this.
+- **On `ha-axi service get <domain.service>`.** One service's field table, its target and its
+  response mode, rendered from the installation itself — so it is never stale and never describes
+  integrations you do not have.
+- **Before dispatch, for `--target-area` and `--target-device` only.** Home Assistant refuses an
+  entity you name outright that lacks the capability a service needs, but an entity it reached
+  through an area or a device is dropped in silence. Where the requirement is published and no
+  alternative is published with it, `ha-axi` says so before sending. `--no-check` skips it.
+
+The published requirement is a list of alternatives, and it is read as one: `media_player.volume_up`
+names both VOLUME_SET and VOLUME_STEP because Home Assistant backs a player that cannot step with
+one that can set. A speaker with only the first is not gated, because it works.
+
+An empty result is also read carefully. Home Assistant returns the states that actually changed, so
+`[]` means both "everything was already as asked" and "nothing was reached at all", and it never
+says which. When the change set is empty and a target was given, `ha-axi` resolves that target:
+reaching nothing exits 1, and reaching something exits 0 with the count and any entity that was
+`unavailable` and therefore skipped.
 
 ### `state` versus `entity`
 
@@ -274,10 +306,13 @@ Covered by tests:
 
 **Would need a live installation to confirm:** that a real Home Assistant accepts the exact request
 bodies built here — `config/entity_registry/update` field names, `return_response` behaviour, and
-the service-data keys individual integrations validate — and how a very large registry behaves in
-practice. The doubles implement the documented protocol and enforce the parts of it that are known
-(the REST double rejects a nested service-call `target` the way Home Assistant does), so they verify
-this client against the specification rather than against a particular server build.
+the service-data keys individual integrations validate — how a very large registry behaves in
+practice, and whether an integration's published `supported_features` requirement agrees with the
+one its Python actually enforces. The doubles implement the documented protocol and enforce the
+parts of it that are known: the REST double rejects a nested service-call `target` the way Home
+Assistant does, refuses an unknown service with the same empty `400` and no body, and drops an
+`unavailable` or incapable entity in the same silence. So they verify this client against the
+specification rather than against a particular server build.
 
 ## Continuous integration
 

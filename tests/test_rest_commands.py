@@ -11,15 +11,15 @@ from conftest import FAKE_TOKEN
 def test_state_list_defaults_to_three_fields_and_reports_the_total(run_cli, rest_env):
     code, out = run_cli(["state", "list"], rest_env)
     assert code == 0
-    assert "states[4]{entity_id,name,state}:" in out
-    assert "count: 4 of 4 total" in out
+    assert "states[6]{entity_id,name,state}:" in out
+    assert "count: 6 of 6 total" in out
     assert "light.example_lamp,Example Lamp,on" in out
 
 
 def test_state_list_filters_by_domain_and_keeps_the_total_visible(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--domain", "light"], rest_env)
     assert code == 0
-    assert "count: 2 of 2 matched (4 total)" in out
+    assert "count: 2 of 2 matched (6 total)" in out
     assert "sensor.example_temperature" not in out
 
 
@@ -34,20 +34,20 @@ def test_state_list_states_the_zero_explicitly(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--domain", "vacuum"], rest_env)
     assert code == 0
     assert "states: 0 entity states found in domain vacuum" in out
-    assert "total: 4 entities in this installation" in out
+    assert "total: 6 entities in this installation" in out
 
 
 def test_state_list_limit_suggests_how_to_see_the_rest(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--limit", "2"], rest_env)
     assert code == 0
-    assert "count: 2 of 4 total" in out
-    assert "Run `ha-axi state list --limit 4` to see all 4" in out
+    assert "count: 2 of 6 total" in out
+    assert "Run `ha-axi state list --limit 6` to see all 6" in out
 
 
 def test_state_list_honours_requested_fields(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--fields", "entity_id,domain"], rest_env)
     assert code == 0
-    assert "states[4]{entity_id,domain}:" in out
+    assert "states[6]{entity_id,domain}:" in out
 
 
 def test_state_list_rejects_an_unknown_field_and_lists_the_valid_ones(run_cli, rest_env):
@@ -87,14 +87,14 @@ def test_state_get_on_a_missing_entity_suggests_how_to_find_it(run_cli, rest_env
 def test_service_list_summarizes_domains(run_cli, rest_env):
     code, out = run_cli(["service", "list"], rest_env)
     assert code == 0
-    assert "domains[2]{domain,services}:" in out
+    assert "domains[5]{domain,services}:" in out
     assert "light,2" in out
 
 
 def test_service_list_for_one_domain(run_cli, rest_env):
     code, out = run_cli(["service", "list", "--domain", "light"], rest_env)
     assert code == 0
-    assert "light.turn_on,Turn on,1" in out
+    assert "light.turn_on,Turn on,3" in out
 
 
 def test_service_list_rejects_an_unknown_domain(run_cli, rest_env):
@@ -157,13 +157,20 @@ def test_service_call_sends_every_target_kind_flat(run_cli, rest_env, rest_serve
 
 
 def test_the_rest_double_rejects_a_nested_target(run_cli, rest_env):
-    """The regression guard itself: a nested target must fail loudly."""
+    """The regression guard itself: a nested target must fail loudly.
+
+    Home Assistant answers an extra key with an empty 400 -- `vol.Invalid`
+    raised as `HTTPBadRequest`, no body -- so which key was wrong can only come
+    from the service model, read on the failure path. The refusal is what this
+    guards; naming the key is what stops it being a dead end.
+    """
     code, out = run_cli(
         ["service", "call", "light.turn_on", "--data-json", '{"target": {"entity_id": "x"}}'],
         rest_env,
     )
     assert code == 1
-    assert "extra keys not allowed" in out
+    assert "does not accept field target" in out
+    assert "fields for light.turn_on: brightness, transition, profile" in out
 
 
 def test_service_call_merges_a_json_object_over_key_value_data(run_cli, rest_env, rest_server):
@@ -192,7 +199,17 @@ def test_service_call_reports_an_empty_change_set_definitively(run_cli, rest_env
 
 def test_service_call_surfaces_a_service_response(run_cli, rest_env, rest_server):
     rest_server.state["service_result"] = {"changed_states": [], "service_response": {"answer": 42}}
-    code, out = run_cli(["service", "call", "calendar.get_events", "--response"], rest_env)
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--response",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        rest_env,
+    )
     assert code == 0
     assert "answer: 42" in out
 
