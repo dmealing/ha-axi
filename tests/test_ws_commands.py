@@ -105,6 +105,124 @@ def test_entity_update_sets_the_name_and_the_area(run_cli, ws_env, ws_server):
     assert ws_server.entities[1]["name"] == "Reading Lamp"
 
 
+def test_entity_update_reports_the_area_inherited_from_the_device(run_cli, ws_env):
+    # light.example_ceiling has no area of its own; its device sits in Example
+    # Hall. The update response is what an agent reads to decide whether the
+    # entity still needs placing, so an empty area here reads as "unassigned"
+    # and invites a helpful reassignment of an entity that was never homeless.
+    code, out = run_cli(
+        ["entity", "update", "light.example_ceiling", "--name", "Reading Lamp"], ws_env
+    )
+    assert code == 0
+    assert "updated[1]: name" in out
+    assert "name: Reading Lamp" in out
+    assert "area: Example Hall" in out
+    assert "area_id: example_hall" in out
+    assert "area_source: device" in out
+
+
+def test_entity_update_and_entity_get_agree_about_the_area(run_cli, ws_env):
+    """The two views are built from the same row, so they cannot drift apart."""
+    _, updated = run_cli(
+        ["entity", "update", "light.example_ceiling", "--icon", "mdi:lamp"], ws_env
+    )
+    _, fetched = run_cli(["entity", "get", "light.example_ceiling"], ws_env)
+
+    def area_lines(text):
+        wanted = ("area:", "area_id:", "area_source:")
+        return [line.strip() for line in text.splitlines() if line.strip().startswith(wanted)]
+
+    assert (
+        area_lines(updated)
+        == area_lines(fetched)
+        == ["area: Example Hall", "area_id: example_hall", "area_source: device"]
+    )
+
+
+def test_entity_update_reports_the_inherited_area_in_json_too(run_cli, ws_env):
+    import json
+
+    code, out = run_cli(
+        ["--json", "entity", "update", "light.example_ceiling", "--name", "Reading Lamp"], ws_env
+    )
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["area"] == "Example Hall"
+    assert doc["area_id"] == "example_hall"
+
+
+def test_a_no_op_update_reports_the_inherited_area_as_well(run_cli, ws_env, ws_server):
+    # --clear-name on an entity that has no name override changes nothing, so
+    # this takes the no-op branch, which made the same wrong area claim.
+    code, out = run_cli(["entity", "update", "light.example_ceiling", "--clear-name"], ws_env)
+    assert code == 0
+    assert "no change made" in out
+    assert "area: Example Hall" in out
+    assert "area_id: example_hall" in out
+    assert "area_source: device" in out
+    assert [c for c in ws_server.received if c["type"] == "config/entity_registry/update"] == []
+
+
+def test_entity_update_reports_no_area_when_there_genuinely_is_none(run_cli, ws_env):
+    # sensor.example_temperature has neither an area nor a device, so an empty
+    # area is the truth here rather than a lost inheritance.
+    code, out = run_cli(
+        ["entity", "update", "sensor.example_temperature", "--name", "Hall Sensor"], ws_env
+    )
+    assert code == 0
+    assert 'area: ""' in out
+    assert 'area_source: ""' in out
+
+
+def test_the_double_answers_an_update_with_the_stored_entry_not_the_request(run_cli, ws_env):
+    """A double that echoed the request could not contradict a wrong client.
+
+    The answer carries fields the request never mentioned, and an `area_id`
+    that is still null because this entity's area belongs to its device.
+    """
+    import json
+
+    code, out = run_cli(
+        [
+            "--json",
+            "ws",
+            "entity.update",
+            "--param",
+            "entity_id=light.example_ceiling",
+            "--param",
+            "name=Reading Lamp",
+        ],
+        ws_env,
+    )
+    assert code == 0
+    entry = json.loads(out)["result"]["entity_entry"]
+    assert entry["name"] == "Reading Lamp"
+    assert entry["platform"] == "demo"
+    assert entry["unique_id"] == "unique-two"
+    assert entry["device_id"] == "device_two"
+    assert entry["area_id"] is None
+
+
+def test_the_double_rejects_a_key_the_api_does_not_declare(run_cli, ws_env):
+    # Home Assistant validates every command against a PREVENT_EXTRA schema.
+    code, out = run_cli(
+        [
+            "ws",
+            "--raw",
+            "config/entity_registry/update",
+            "--param",
+            "entity_id=light.example_lamp",
+            "--param",
+            "nickname=Nope",
+        ],
+        ws_env,
+    )
+    assert code == 1
+    assert "rejected the arguments" in out
+    assert "INVALID_FORMAT" in out
+    assert "nickname" in out
+
+
 def test_entity_update_is_idempotent(run_cli, ws_env, ws_server):
     code, out = run_cli(
         ["entity", "update", "light.example_lamp", "--name", "Example Lamp"], ws_env

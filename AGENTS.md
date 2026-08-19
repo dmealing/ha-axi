@@ -86,8 +86,19 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 - **`entity_id` is not stable identity.** Filter by area or search; do not infer meaning from an id.
 - **An entity with no `area_id` inherits its device's area.** Any per-area count or filter that
   ignores the device fallback will be wrong.
+- **Every view that reports an area builds it with `_row()`.** `effective_area_id` lives there and
+  nowhere else, so a view that reads `entry["area_id"]` directly reports `""` for an entity whose
+  area comes from its device. `entity update` did exactly that: it answered from the update payload
+  and the pre-update entry, without ever reading the device registry, so a rename of a
+  device-placed entity replied `area: ""` while `entity get` on the same entity said otherwise. The
+  data was never damaged — but an agent reads the update response, and an empty area there reads as
+  "unassigned". Update and get now share `_row()` and both carry `area_source`.
 - **`state` (REST) and `entity` (WebSocket) are different views.** Names and areas exist only in the
-  registry; states exist only over REST.
+  registry; states exist only over REST. `state list --area` therefore reads the registry over the
+  WebSocket — the one command that crosses transports — and pays that round-trip only when the flag
+  is passed. The flag exists because an agent that learns `--area` on `entity list` will reach for
+  it on `state list`; a filter is not the same as importing registry columns into the runtime view,
+  which is why `area` is still not a `state list --fields` choice.
 - **Adding a WebSocket command** is one entry in `REGISTRY` in `src/ha_axi/ws.py`. It becomes
   reachable through `ha-axi ws <name>` immediately; a typed subcommand is optional on top.
 - **`--json` is the global output mode.** Command flags carrying JSON payloads are named
@@ -108,7 +119,7 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~330 tests, a couple of seconds
+pytest                                   # ~350 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
@@ -118,12 +129,36 @@ real loopback servers in `tests/conftest.py`: an `http.server` for REST and a re
 server that performs the Home Assistant `auth_required` / `auth` / `auth_ok` handshake. If a
 behaviour cannot be tested that way, say so in the PR rather than reaching for real credentials.
 
-Two testing gotchas already paid for:
+**The doubles must answer like Home Assistant, not like the client.** A double that accepts and
+echoes whatever it is sent can only prove the client agrees with itself, which is how the service
+call wire-shape defect and the `entity update` area defect both reached a live installation with a
+green suite. Two rules follow, and neither is optional:
+
+- **Model the refusals, not just the successes.** The REST double rejects a nested `target` because
+  Home Assistant's `PREVENT_EXTRA` schema does; the WebSocket double rejects any key outside
+  `WS_COMMAND_KEYS` with `invalid_format` for the same reason. That table is deliberately *not*
+  imported from `ha_axi.ws.REGISTRY` — a second opinion that is a copy of the first is not one. A
+  new client parameter will be refused here until it is added to the table too; adding it is how
+  the parameter gets confirmed rather than assumed.
+- **Answer with resulting state.** `config/entity_registry/update` returns the stored entry — every
+  field, including ones the request never mentioned, and an `area_id` that stays `null` when the
+  area belongs to the device. Every result is JSON round-tripped on the way out, so a client can
+  never hold a reference into the double's state and pass by sharing an object with it.
+
+Three testing gotchas already paid for:
 
 - `websockets`' sync `Server.serve_forever()` takes **no** arguments. Only the stdlib HTTP server
   accepts `poll_interval`, which the REST double uses to keep teardown off the critical path.
-- The two doubles listen on different ports, so a test needing both transports healthy has to bind
-  each one explicitly rather than sharing a single `HA_URL`.
+- The two doubles listen on different ports. `FakeInstallation` puts a front door in front of both
+  and gives out one `HA_URL`: it reads each connection's request line and splices the connection to
+  the WebSocket double for `/api/websocket` and to the REST double for everything else, which is
+  the topology a real instance has. Use the `installation_env` fixture for anything that crosses
+  transports — `state list --area`, `doctor` — and `rest_env` / `ws_env` when only one is in play.
+  Routing on the request line alone is what keeps request bodies out of it; do not teach the front
+  door to parse a body.
+- Closing a listening socket does not reliably wake a thread blocked in `accept()`, so
+  `FakeInstallation.stop()` opens one throwaway connection to knock, then joins. A fixture that
+  merely closes the socket leaks a thread per test.
 
 `skills/ha-axi/SKILL.md` is generated from the CLI's command table. Change the commands, then run
 `ha-axi setup skill` and commit the result; CI fails if the two disagree.

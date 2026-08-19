@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import FAKE_TOKEN
 from ha_axi import __version__
 from ha_axi.cli import COMMAND_ORDER, command_specs
 
@@ -204,34 +203,18 @@ def test_doctor_reports_a_missing_environment_and_exits_non_zero(run_cli):
     assert "healthy: false" in out
 
 
-def test_doctor_is_healthy_when_both_transports_answer(rest_server, ws_server, capsys):
-    """The doubles listen on separate ports, so bind each transport explicitly."""
-    from ha_axi import output
+def test_a_healthy_doctor_carries_no_exit_code_key(installation_env):
+    """The success document must not smuggle the non-zero exit the failure sets.
+
+    The end-to-end run lives in tests/test_cross_transport.py; this asserts the
+    document shape the exit code is derived from.
+    """
     from ha_axi.cli import Context
     from ha_axi.commands import doctor
-    from ha_axi.config import load
-    from ha_axi.rest import RestClient
-    from ha_axi.ws import WsClient
 
-    rest_config = load({"HA_URL": rest_server.url, "HA_TOKEN": FAKE_TOKEN})
-    ws_config = load({"HA_URL": f"http://127.0.0.1:{ws_server.port}", "HA_TOKEN": FAKE_TOKEN})
-
-    class BothTransports(Context):
-        def rest(self):
-            return RestClient(rest_config)
-
-        def ws(self):
-            return WsClient(ws_config)
-
-    ctx = BothTransports({"HA_URL": rest_server.url, "HA_TOKEN": FAKE_TOKEN})
-    doc = doctor.run(ctx, "doctor", None)
-    output.write(doc)
-    out = capsys.readouterr().out
-
+    doc = doctor.run(Context(installation_env), "doctor", None)
     assert doc["healthy"] is True
     assert "__exit_code__" not in doc
-    assert "rest,ok" in out
-    assert 'websocket,ok,"authenticated, 3 registry entries in 2 areas"' in out
 
 
 def test_no_command_writes_progress_noise_to_stdout(run_cli, rest_env, capsys):

@@ -41,6 +41,7 @@ Read entity states from the Home Assistant REST API.
 
 ```sh
 ha-axi state list --domain light
+ha-axi state list --area 'Example Room' --domain light
 ha-axi state list --search lamp --limit 20
 ha-axi state list --domain sensor --state unavailable
 ha-axi state get light.example_lamp
@@ -48,6 +49,7 @@ ha-axi state get media_player.example_speaker --full
 ```
 
 - state is the runtime view; run `ha-axi entity list` for registry names and areas
+- --area reads the WebSocket registry, where areas live; it costs one extra round-trip
 
 ### `ha-axi service`
 

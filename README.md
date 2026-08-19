@@ -86,7 +86,7 @@ help[4]:
 
 | Command | Transport | What it does |
 | --- | --- | --- |
-| `ha-axi state list\|get` | REST | Entity states and attributes as they are right now |
+| `ha-axi state list\|get` | REST | Entity states and attributes as they are right now (`--area` also reads the registry) |
 | `ha-axi service list\|call` | REST | Discover services and call them |
 | `ha-axi template render` | REST | Render a Jinja template server-side |
 | `ha-axi entity list\|get\|update` | WebSocket | The entity registry: names, areas, platforms |
@@ -117,9 +117,17 @@ They are different views of the same installation and both are needed:
 - **`entity`** is the registry view over WebSocket — an entity's stable identity: the name a user
   set, the area it belongs to, the integration that supplied it.
 
-An entity with no area of its own **inherits its device's area**; `ha-axi entity get` reports which
-of the two the area came from, and `entity list` resolves `area_id` to the area's name in the
-default output so no second call is needed.
+An entity with no area of its own **inherits its device's area**; `ha-axi entity get` and
+`entity update` both report which of the two the area came from, and `entity list` resolves
+`area_id` to the area's name in the default output so no second call is needed.
+
+`--area` works the same on `state list`, `entity list` and `device list`. On `state list` it costs
+one extra registry round-trip, because areas exist only over WebSocket — paid only when the flag is
+passed:
+
+```sh
+ha-axi state list --area 'Example Room' --domain light
+```
 
 ### Adding WebSocket commands
 
