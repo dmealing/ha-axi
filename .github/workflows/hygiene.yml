@@ -1,0 +1,42 @@
+# The one check a pull request gets on a GitHub-hosted runner.
+#
+# The leak scan takes seconds and it is the gate that must run before a human
+# looks at a diff: this repository is public and the tool talks to home
+# automation installations, so an address, a token or a real entity name in a
+# diff is the failure that matters. Everything heavier — lint, the Python
+# matrix, the generated-skill check — runs in `ci.yml` on the maintainer's
+# self-hosted runner, on `main` rather than on pull requests.
+#
+# That is not a reduction in rigour, and a thin-looking PR check should not be
+# read as one: every change goes through the local no-mistakes gate — review,
+# tests, lint, docs — before the PR exists. GitHub-hosted CI is not the primary
+# quality signal here. Keep this workflow to the one cheap job; adding the
+# matrix back would restore the duplicate-run waste it was split up to end.
+name: hygiene
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  leakcheck:
+    name: leak check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Prove the scanner still detects what it claims to before trusting it: a
+      # scanner that quietly stopped matching would otherwise pass every diff.
+      - name: Self-test against a synthetic dirty fixture
+        run: python3 scripts/leakcheck.py --demo
+      - name: Scan every tracked file
+        run: python3 scripts/leakcheck.py

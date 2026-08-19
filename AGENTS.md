@@ -131,6 +131,63 @@ Two testing gotchas already paid for:
 Supported Pythons are 3.9 through 3.12. `from __future__ import annotations` is what makes the
 `X | None` annotation syntax safe on 3.9 — keep it at the top of every module.
 
+## Continuous integration
+
+Three workflows, split by where the work is cheap:
+
+- **`.github/workflows/ci.yml`** — the heavy matrix (leak scan, lint, `pytest` on 3.9 through 3.12,
+  the generated-skill check) on the maintainer's self-hosted runner. Triggers: push to `main`, a
+  nightly `schedule`, and `workflow_dispatch`. Never pull requests.
+- **`.github/workflows/hygiene.yml`** — the leak scan alone, on `ubuntu-latest`, on `pull_request`.
+  Exactly one GitHub-hosted check per PR, and it takes seconds.
+- **`.github/workflows/release.yml`** — GitHub-hosted, and to stay that way: OIDC trusted publishing
+  needs `id-token: write` on a GitHub-hosted runner.
+
+**`ci.yml` must never gain a `pull_request` trigger.** This repository is public and the runner
+is the maintainer's own workstation. Every trigger it has requires write access, so fork-submitted
+code cannot reach the machine; `pull_request` would hand any contributor on the internet code
+execution on it, in one line, with no other visible symptom. The reasoning is repeated at the top of
+the file so it survives someone later "helpfully" adding PR coverage.
+
+**A thin PR check is the design, not an oversight.** Every change goes through the local no-mistakes
+gate — review, tests, lint, docs — before a PR is opened, so GitHub-hosted CI is not the primary
+quality signal here. Do not add jobs to `hygiene.yml` to make pull requests look better covered. The
+arrangement this replaced triggered the full matrix on both `push: branches: ["**"]` and
+`pull_request`, so every PR branch ran it twice on identical commits; one copy went green while its
+twin sat queued for over an hour, leaving the PR permanently "unstable".
+
+The nightly cron deliberately avoids 08:17 UTC, which a sibling project's self-hosted workflow holds
+on the same workstation.
+
+**A workflow can only be dispatched if the file is already on the default branch.** `workflow_dispatch`
+resolves the workflow id against `main`, so a brand-new workflow file 404s on its own branch and
+cannot be proven to work until after it merges. That is why the self-hosted workflow kept the
+filename `ci.yml` instead of taking the sibling project's `local-ci.yml`: reusing the registered name
+is what allowed the real file to be dispatched on its branch and watched through to completion on the
+runner before anyone merged it. Same trick applies to any future workflow worth verifying early.
+
+`actions/setup-python` does supply all four versions on that runner — actions/python-versions has
+`linux` / `x64` / `22.04` builds for 3.9 through 3.12, and they land in the runner's persistent tool
+cache, so only the first run pays the download. If that ever stops holding, `uv` is on the runner's
+`PATH` and `uv python install` is the fallback; do not answer it by dropping a version from the
+matrix.
+
+Checkouts on the self-hosted runner pass `persist-credentials: false`. That workspace outlives the
+job, and a token left behind in its `.git/config` would outlive it too.
+
+**A self-hosted runner runs as a real user, and that user's `~/.local` is on every job's path.**
+`~/.local/lib/python3.X/site-packages` is keyed by X.Y only, so it is picked up by an interpreter
+`actions/setup-python` just unpacked into the tool cache, and `~/.local/bin` sits ahead of that
+interpreter's `bin` on `PATH`. A bare `pytest`, `ruff` or `ha-axi` therefore runs the maintainer's
+copy, under `/usr/bin/python3.X`, against whatever checkout that copy points at. The first run of
+this workflow demonstrated both halves: py3.9 and py3.12 passed because no user site exists for those
+versions, while py3.10 and py3.11 failed with `ModuleNotFoundError: No module named 'ha_axi'`, and
+the lint and skill jobs went green having exercised the maintainer's binaries rather than the
+commit's. Every job that needs third-party packages therefore does `python -m venv --clear .venv` and
+calls tools as `.venv/bin/<tool>`; a venv sets `ENABLE_USER_SITE = False`, so the leak cannot happen.
+`--clear` because the workspace is reused between jobs. Do not "simplify" these back to bare tool
+names.
+
 ## Releasing
 
 release-please owns the version. `.release-please-manifest.json` records the **last released**
