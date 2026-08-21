@@ -243,9 +243,14 @@ class _Scanner:
 
 
 def _message(commit_text):
-    """``<summary>`` then an optional body and footers. Upstream ``message``."""
+    """``<summary>`` then an optional body and footers. Upstream ``message``.
+
+    Returns nothing where upstream returns a syntax tree: the only question here
+    is whether the parse survives, so the tree would be built and thrown away.
+    Every production below still runs in the order and with the backtracking
+    upstream uses, because *where* it gives up is what decides that.
+    """
     scanner = _Scanner(_js_trim(commit_text))
-    node = scanner.enter("message")
 
     result = _summary(scanner)
     if isinstance(result, _Rejected):
@@ -272,7 +277,6 @@ def _message(commit_text):
             break
         if isinstance(_newline(scanner), _Rejected):
             break
-    del node
 
 
 def _summary(scanner):
@@ -483,8 +487,12 @@ def _newline(scanner):
     return node
 
 
+#: The same set as a string, because `str.strip` takes characters, not a set.
+_JS_TRIM_CHARS = "".join(sorted(_JS_TRIM))
+
+
 def _js_trim(text):
-    return text.strip("".join(_JS_TRIM))
+    return text.strip(_JS_TRIM_CHARS)
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +661,7 @@ def check(message, engine="python"):
     """Every problem release-please would hit in ``message``."""
     problems = []
     parts = split_messages(message)
+    lines = message.splitlines()
     cursor = 0
     for index, part in enumerate(parts):
         error = parse_part(part, engine=engine)
@@ -662,7 +671,7 @@ def check(message, engine="python"):
         if error is None:
             continue
         line = _absolute_line(message, part, offset, error.line)
-        source = message.splitlines()[line - 1] if 0 < line <= len(message.splitlines()) else ""
+        source = lines[line - 1] if 0 < line <= len(lines) else ""
         problems.append(
             Problem(
                 error,
@@ -686,10 +695,8 @@ def _absolute_line(message, part, offset, parsed_line):
     """
     if offset < 0:
         return parsed_line
-    trimmed = _js_trim(part)
-    stripped = part[: len(part) - len(part.lstrip("".join(_JS_TRIM)))] if trimmed else part
-    before = message[: offset + len(stripped)]
-    return before.count("\n") + parsed_line
+    leading = len(part) - len(part.lstrip(_JS_TRIM_CHARS))
+    return message[: offset + leading].count("\n") + parsed_line
 
 
 # ---------------------------------------------------------------------------
