@@ -1,0 +1,72 @@
+fix(toon): satisfy both TOON spec MUST violations and exact-match leak allowances (#10)
+
+* fix(toon): satisfy both TOON spec MUST violations, and match leak allowances exactly
+
+Two fixes landed in the sibling AXI project today against files this repository
+carries its own copy of. Both are ported here, because two copies that behave
+differently are worse than one that is wrong.
+
+**Section 2 - canonical decimal form.** The spec makes decimal form mandatory for
+`0` and for `1e-6 <= |n| < 1e21`. Python's float repr leaves decimal form outside
+roughly `[1e-4, 1e16)`, so `json.dumps` emitted `1e-06` and `1e+16` well inside
+the range the spec reserves for plain decimals. `_number` now formats through
+`Decimal(repr(value))` inside the canonical range - the shortest round-tripping
+digits Python already computed - and defers to `json.dumps` outside it, where an
+exponent is permitted.
+
+**Section 9.4 - list form in list-item position.** A tabular header on a hyphen
+line is a keyless fields-bearing header, which section 6 allows only at the
+document root, so an inner array MUST take list form however uniform its items
+are. `array()` now carries `allow_tabular` and `list_item()` passes `False`. The
+restriction is the position and not the depth: a *key* inside a list-item object
+still reaches tabular form.
+
+**The score is a test result now, not a claim.** All 179 official encode fixtures
+are vendored byte-for-byte under `tests/fixtures/toon-spec/` (MIT, with the
+upstream licence, the commit they came from, per-file checksums and a refresh
+recipe recorded beside them) and run on every `pytest`. The case count is
+asserted, so a fixture that stops being collected fails the suite instead of
+quietly lowering the score, and the checksums are asserted, so a fixture edited
+to suit the encoder fails too. 177/179 shipped in 0.2.2 because nothing in the
+suite was measuring it.
+
+**No command's output changes.** The two bands are outside everything the tool
+emits today - `music.stars` yields half-star steps, and `similar` rounds a sonic
+distance to four places - so the guarantee this restores is the encoder's, which
+is what the README's strictness claim is about. Checked rather than assumed: an
+A/B harness rendered all 383 TOON documents the suite produces under both the old
+and the new encoder and none differ. No existing test needed updating.
+
+**The leak scanner's allowance is matched exactly, from every entry point.** One
+vendored fixture trips the `home-path` rule on a synthetic Windows drive path,
+and JSON has no comment syntax to carry the per-line allow marker, so
+`leakcheck.py` gains `PATH_ALLOWANCES`: per path *and* per rule, printed by
+`--rules`, and tested by re-scanning the file with the table switched off and
+asserting exactly the rules and shapes the entry names. The lookup is a
+dictionary hit, not a trailing match - a name that merely ends with an allowed
+one is a different file, and honouring it would grant the entry every directory
+it is ever copied into.
+
+An exact comparison is only worth as much as the entry points' agreement about
+what to compare, and two of the four did not agree: an absolute target at the
+default root, and the `os.walk` fallback under an absolute `--root`, both handed
+over absolute names. `repo_relative` normalises all of them, so the tracked-files
+scan, `--staged` through the pre-commit hook with its absolute `--root`, explicit
+paths and the walk fallback name one file one way. Each mode is tested against a
+repository holding both the exempted file and a decoy under a shadowing
+directory, and both halves are mutation-checked: reinstating trailing matching
+fails seven tests, and reinstating the un-normalised names fails two.
+
+No rule was weakened, no fixture was edited, and the remaining loose matches in
+the guard are audited and recorded in AGENTS.md.
+
+Verified 179/179 against a built and installed wheel, not only the checkout, and
+the suite is green on 3.10, 3.11 and 3.12.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* no-mistakes(review): Gate fixture properties/spec versions, normalize leakcheck names, dedupe shape
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>

@@ -163,6 +163,8 @@ def test_the_allow_marker_also_applies_to_the_condensed_pass():
 
 
 ALLOWED_PATH = "tests/fixtures/toon-spec/encode/primitives.json"
+LOST_MESSAGE_PATH = "tests/fixtures/commit-messages/sibling-41bcb73.txt"
+LUCKY_MESSAGE_PATH = "tests/fixtures/commit-messages/46c25f9.txt"
 TWO_SHAPES = "path " + "/ho" + "me/" + "someone" + "/notes and " + "192." + "168.1.10"
 
 
@@ -191,6 +193,8 @@ def test_an_allowance_matches_only_the_exact_path_it_names():
 #: fragments like DIRTY, so this file stays clean under its own scanner.
 EXPECTED_SHAPES = {
     ALLOWED_PATH: frozenset({"C:" + "\\\\" + "Users" + "\\\\" + "path"}),
+    LOST_MESSAGE_PATH: frozenset({"noreply" + "@" + "anthropic" + ".com"}),
+    LUCKY_MESSAGE_PATH: frozenset({"noreply" + "@" + "anthropic" + ".com"}),
 }
 
 
@@ -288,9 +292,12 @@ def _hook_repo(tmp_path, *hooks):
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     (repo / ".githooks").mkdir()
-    (repo / "scripts" / "leakcheck.py").write_text(
-        (REPO_ROOT / "scripts" / "leakcheck.py").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    # Both scripts, because `commit-msg` runs both: a repository missing one
+    # would block every commit under `set -e` and look like the scanner firing.
+    for script in ("leakcheck.py", "commitcheck.py"):
+        (repo / "scripts" / script).write_text(
+            (REPO_ROOT / "scripts" / script).read_text(encoding="utf-8"), encoding="utf-8"
+        )
     for name in hooks:
         target = repo / ".githooks" / name
         target.write_text(
@@ -339,11 +346,14 @@ def test_the_commit_msg_hook_blocks_a_dirty_message(tmp_path):
     repo = _hook_repo(tmp_path, "pre-commit", "commit-msg")
     (repo / "clean.txt").write_text("nothing to see\n", encoding="utf-8")
     _git(repo, "add", "-A")
-    blocked = _git(repo, "commit", "-m", "tested on " + "192." + "168.1.10", check=False)
+    dirty = "test: tested on " + "192." + "168.1.10"
+    blocked = _git(repo, "commit", "-m", dirty, check=False)
     assert blocked.returncode != 0
     assert b"private-ip" in blocked.stdout + blocked.stderr
 
-    assert _git(repo, "commit", "-m", "tested on a local instance").returncode == 0
+    # Conventional, because the same hook now also refuses a message
+    # release-please cannot parse. See tests/test_commit_message.py.
+    assert _git(repo, "commit", "-m", "test: tested on a local instance").returncode == 0
 
 
 def test_identity_trailers_do_not_block_a_commit(tmp_path):

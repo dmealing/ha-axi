@@ -9,6 +9,49 @@ permissions:
   contents: read
 
 jobs:
+  # release-please reports success when it cannot read a commit. It catches the
+  # parse error, logs `commit could not be parsed` at debug level, carries on
+  # with whatever it *could* read, and exits 0 — so a message its parser chokes
+  # on is dropped from the changelog and from the version bump while the run goes
+  # green. That is not hypothetical here: it is how a merged fix sat on `main`
+  # unreleased while this workflow reported success, with `Considering: 0
+  # commits` buried in the log.
+  #
+  # Every commit since the last release tag has to be readable by the parser
+  # release-please actually runs — a byte-for-byte copy of it lives in
+  # `vendor/conventional-commits-parser/`, so this needs no npm install and no
+  # network. A commit it cannot read is one release-please silently dropped, and
+  # zero readable commits with commits waiting is the exact state that shipped
+  # nothing; both fail here instead of passing quietly. Nothing since the tag is
+  # the healthy no-op and still passes, which is the distinction the log did not
+  # make.
+  #
+  # This job deliberately does NOT `needs:` the one below. It has to fail on its
+  # own account, including on a run where release-please itself errored, and its
+  # verdict does not depend on the outcome it is auditing.
+  commit-audit:
+    name: every commit is readable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The audit compares `main` against the last release tag, so it needs
+          # both the tags and the commits after them.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # A checker that stopped detecting anything reads exactly like a checker
+      # with nothing to report, so prove it still works before trusting it.
+      - name: Self-test the checker
+        run: python3 scripts/commitcheck.py --demo
+      - name: Audit every commit since the last release
+        run: python3 scripts/commitcheck.py --since-release
+
   # Drives version bumps and the changelog from conventional commits, and opens
   # a release PR. Merging that PR is what cuts a release.
   release-please:
@@ -26,6 +69,30 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # What the action decided, in the run summary rather than only in the log.
+      # "No release PR and no release" is a legitimate outcome and also what a
+      # silent parse failure looks like; `commit-audit` is what tells the two
+      # apart, so say here which one this run was.
+      - name: Say what release-please decided
+        env:
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          PRS_CREATED: ${{ steps.release.outputs.prs_created }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          {
+            echo "### release-please"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| release created | ${RELEASE_CREATED:-false} |"
+            echo "| release PR created or updated | ${PRS_CREATED:-false} |"
+            echo "| tag | ${TAG_NAME:-none} |"
+            echo ""
+            echo "A run with neither a release nor a release PR means nothing"
+            echo "releasable has landed. The \`every commit is readable\` job is"
+            echo "what proves that is the truth rather than a parse failure."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: publish to PyPI
