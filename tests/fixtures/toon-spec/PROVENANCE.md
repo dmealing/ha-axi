@@ -5,10 +5,10 @@
 | | |
 | --- | --- |
 | Upstream | <https://github.com/toon-format/spec> |
-| Path | `tests/fixtures/encode/` |
+| Upstream path | `tests/fixtures/encode/` inside the upstream clone — the vendored copy is `tests/fixtures/toon-spec/encode/` |
 | Spec version | 4.1.1 (SPEC.md v4.1, released 2026-08-05) |
 | Commit | `62f16b369408180f1faf1cba7da1b46d1f336f12` |
-| Licence | MIT — see `LICENSE` in this directory, copied from the same commit |
+| Licence | MIT — the copy in this repository is `tests/fixtures/toon-spec/LICENSE`, from the same commit |
 
 `tests/test_toon_conformance.py` runs every case in `encode/` against `ha_axi.toon.encode` and
 fails the suite if any of them regresses. `checksums.txt` records the SHA-256 of each vendored
