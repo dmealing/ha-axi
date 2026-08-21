@@ -1,0 +1,60 @@
+fix(toon): satisfy both TOON spec MUST violations, enforced by vendored fixtures (#9)
+
+* fix(toon): emit canonical decimals, and list form where the spec requires it
+
+The encoder claims strict TOON v4.1 on the tin and scored 177/179 against the
+specification's own encode fixtures. Both failures were MUST violations, and
+both are fixed here.
+
+**Section 2 — canonical decimal form.** The spec makes decimal form mandatory
+for `0` and for `1e-6 <= |n| < 1e21`. Python's float repr leaves decimal form
+outside roughly `[1e-4, 1e16)`, so `json.dumps` emitted `1e-06` and `1e+16`
+well inside the range the spec reserves for plain decimals. Both bands are
+ordinary Home Assistant sensor data — a current reading in amps, a byte
+counter — and reach stdout through `state get --full`. `_number` now formats
+through `Decimal(repr(value))` inside the canonical range, which is the
+shortest round-tripping digits Python already computed, and defers to
+`json.dumps` outside it where an exponent is permitted.
+
+**Section 9.4 — list form in list-item position.** A tabular header on a hyphen
+line is a keyless fields-bearing header, which section 6 allows only at the
+document root, so an inner array MUST take list form however uniform its items
+are. `array()` now carries `allow_tabular` and `list_item()` passes `False`.
+The restriction is the position and not the depth: a *key* inside a list-item
+object still reaches tabular form. Reachable through `api` and `ws --raw`,
+which hand arbitrary installation JSON to the encoder, and the document it
+emitted before was one a strict decoder must reject.
+
+**The score is now a test result rather than an assertion.** All 179 official
+encode fixtures are vendored byte-for-byte under `tests/fixtures/toon-spec/`
+(MIT, with the upstream licence, the commit they came from, per-file checksums
+and a refresh recipe recorded beside them) and run on every `pytest`. The case
+count is asserted, so a fixture that stops being collected fails the suite
+instead of quietly lowering the score, and the checksums are asserted, so a
+fixture edited to suit the encoder fails too. A 177/179 ships in the first
+place because nothing in the suite was measuring it.
+
+One vendored fixture trips the leak scanner's `home-path` rule on a synthetic
+Windows drive path, and JSON has no comment syntax to carry the per-line allow
+marker. `leakcheck.py` gained `PATH_ALLOWANCES` for that: per path *and* per
+rule, printed by `--rules`, and tested by re-scanning the file with the table
+switched off and asserting that exactly the named rules fire — so an entry that
+outlives its cause fails the suite rather than widening in silence. No rule was
+weakened and no fixture was edited.
+
+Output change, stated because agents parse this output: a float in
+`[1e-6, 1e-4)` or `[1e16, 1e21)` now prints as a plain decimal instead of in
+exponent notation. No command's structure changes, no flag changes, `--json` is
+untouched, and no existing test needed updating.
+
+Verified 179/179 against a built and installed wheel, not only the checkout.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* no-mistakes(review): Tighten leakcheck allowance matching, pin exempted shapes, de-number prose
+
+* no-mistakes(document): Clarify upstream vs vendored paths in PROVENANCE
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>

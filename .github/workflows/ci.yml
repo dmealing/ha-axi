@@ -64,6 +64,29 @@ jobs:
         run: python3 scripts/leakcheck.py --demo
       - name: Scan every tracked file
         run: python3 scripts/leakcheck.py
+  # A commit message release-please cannot parse is dropped from the changelog
+  # and the version bump while the release workflow exits 0. `release.yml` fails
+  # on that too, but it only runs on `main`; here it also runs nightly, so an
+  # allowance that has outlived its cause surfaces without waiting for a merge.
+  commits:
+    name: commit messages are readable
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Self-test the checker
+        run: python3 scripts/commitcheck.py --demo
+      - name: Audit every commit since the last release
+        run: python3 scripts/commitcheck.py --since-release
 
   # EVERY job that needs third-party packages installs into a fresh `.venv` and
   # calls the tools by path out of it. That is not ceremony. This runner runs as
@@ -112,6 +135,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      # `tests/test_commit_message.py` compares this repository's transcription
+      # of the conventional-commits grammar against the vendored upstream parser,
+      # and *skips* that comparison where `node` is absent. A skipped agreement
+      # check reads exactly like a passing one, so the interpreter is installed
+      # here rather than hoped for.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - run: python -m venv --clear .venv
       - run: .venv/bin/python -m pip install --upgrade pip
       - run: .venv/bin/pip install -e ".[dev]"
@@ -138,7 +169,7 @@ jobs:
   # Nothing watches a workflow that runs on main and overnight, so a failure has
   # to come and find someone.
   notify:
-    needs: [leakcheck, lint, test, skill]
+    needs: [leakcheck, commits, lint, test, skill]
     if: always() && contains(needs.*.result, 'failure')
     runs-on: [self-hosted, linux]
     timeout-minutes: 5

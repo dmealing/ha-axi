@@ -269,6 +269,17 @@ scripts/install-hooks.sh   # points core.hooksPath at .githooks
 - **CI** runs `--demo` first — proving the scanner still detects what it claims — and then scans
   the whole tree. Bypassing the local hooks only delays the failure.
 
+A commit message is checked as well as scanned. release-please builds the changelog and the version
+bump from commit messages, and when its parser cannot read one it says so at debug level, drops the
+commit and **exits 0** — a merged fix that is never published, with a green release run over it. So
+`.githooks/commit-msg` also runs `scripts/commitcheck.py`, and the release workflow re-checks every
+commit since the last tag. Rich commit bodies are the point of this history and nothing here
+restricts them; the one shape to know is that a body line must not *begin* with a word run straight
+into an unclosed or nested parenthesis — `` `Decimal(repr(v))` `` at a line start is refused, and the
+same phrase one word further along the line is fine. This repository has never lost a release to it,
+and `tests/fixtures/commit-messages/` records how narrowly. Run `scripts/commitcheck.py --rules` for
+the grammar rule and its citation.
+
 Fixtures, tests, docs and examples use invented identifiers throughout:
 `light.example_lamp`, area `Example Room`, `https://homeassistant.example.com`. Test fixtures build
 credential shapes at run time rather than embedding literals, so the suite that proves the scanner

@@ -1,16 +1,25 @@
 #!/usr/bin/env sh
-# Block a commit message that would publish installation-specific data.
+# Two things a commit message can get wrong, both invisible until much later.
 #
-# File content and commit messages are separate channels; --staged only covers
-# the former, and a message is just as public.
+# 1. It can publish library-specific data. File content and commit messages are
+#    separate channels; --staged only covers the former, and a message is just
+#    as public.
+# 2. It can be one release-please cannot parse. That one is worse, because it
+#    fails silently and green: the release workflow logs "commit could not be
+#    parsed" at debug level, considers zero commits, skips the release and exits
+#    0, and the fix sits on main unpublished. It has already cost one release
+#    here. See scripts/commitcheck.py for the exact grammar rule.
+#
+# Install with: scripts/install-hooks.sh
 set -e
 
 root=$(git rev-parse --show-toplevel)
 python=$(command -v python3 || command -v python || true)
 
 if [ -z "$python" ]; then
-  echo "commit-msg: no python interpreter found; cannot run the leak check" >&2
+  echo "commit-msg: no python interpreter found; cannot run the checks" >&2
   exit 1
 fi
 
 "$python" "$root/scripts/leakcheck.py" --commit-msg "$1"
+"$python" "$root/scripts/commitcheck.py" --commit-msg "$1" --root "$root"

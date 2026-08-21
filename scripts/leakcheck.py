@@ -194,6 +194,17 @@ PATH_ALLOWANCES = {
     # under the users directory. It names nobody and reaches nothing -- and the
     # shape is deliberately not repeated here, or this file would trip too.
     "tests/fixtures/toon-spec/encode/primitives.json": frozenset({"home-path"}),
+    # The sibling project's commit message that release-please could not read,
+    # kept byte-for-byte so the regression is the real thing rather than a
+    # likeness of it. Its co-author trailer carries a no-reply address, which
+    # --commit-msg mode already permits as an identity trailer; the same bytes
+    # stored as a file reach the tracked-files scan instead, and the file cannot
+    # carry a marker without ceasing to be the message.
+    "tests/fixtures/commit-messages/sibling-41bcb73.txt": frozenset({"personal-email"}),
+    # This repository's own commit describing the same fix, kept beside it because
+    # the pair is the evidence: same prose, same term, and only one of them
+    # parses. Same trailer, same reason it cannot carry a marker.
+    "tests/fixtures/commit-messages/46c25f9.txt": frozenset({"personal-email"}),
 }
 
 

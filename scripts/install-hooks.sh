@@ -9,3 +9,4 @@ root=$(git rev-parse --show-toplevel)
 git -C "$root" config core.hooksPath .githooks
 echo "hooks: core.hooksPath set to .githooks"
 echo "check: run scripts/leakcheck.py --demo to confirm the scanner works"
+echo "check: run scripts/commitcheck.py --demo to confirm the message check works"
