@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from decimal import Decimal
 from typing import Any
 
 __all__ = ["TOON_DELIMITERS", "encode", "encode_scalar"]
@@ -34,6 +35,11 @@ _CONTROL = re.compile(r"[\x00-\x1f]")
 _ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 _STRUCTURAL = set(':"\\[]{}')
+
+# Section 2: canonical decimal form is REQUIRED for 0 and for this magnitude
+# range. Outside it, exponent notation is permitted.
+_CANONICAL_MIN = 1e-6
+_CANONICAL_MAX = 1e21
 
 
 def encode(value: Any, *, indent: int = 2, delimiter: str = ",") -> str:
@@ -83,11 +89,33 @@ class _Encoder:
         return "null"
 
     def _number(self, value: float) -> str:
+        """Encode a float in the form section 2 requires for its magnitude.
+
+        Python's float repr switches to exponent notation outside roughly
+        [1e-4, 1e16), which is narrower than the range the spec makes canonical
+        at both ends, so ``json.dumps`` alone emits ``1e-06`` and ``1e+16``
+        where the spec demands ``0.000001`` and ``10000000000000000``.
+        """
         # Section 3: non-finite numbers normalize to null.
         if math.isnan(value) or math.isinf(value):
             return "null"
-        if value == int(value) and abs(value) < 1e16:
-            return str(int(value))
+        if value == 0 or _CANONICAL_MIN <= abs(value) < _CANONICAL_MAX:
+            # Canonical decimal form: no exponent, no trailing fractional
+            # zeros, an integral value as an integer, and -0 as 0.
+            if value == int(value):
+                return str(int(value))
+            # Decimal(repr(value)) reads the shortest round-tripping digits
+            # Python already computed; Decimal(value) would expand the exact
+            # binary value into a fifty-digit fraction instead.
+            text = format(Decimal(repr(value)), "f")
+            if "." in text:
+                # A guard, not a fix-up: the shortest round-tripping digits
+                # never end in a fractional zero. Section 2 states the rule, so
+                # this states it too rather than resting on that.
+                text = text.rstrip("0").rstrip(".")
+            return text
+        # Outside the canonical range section 2 permits exponent notation, and
+        # json.dumps emits the lowercase `e` and explicit sign it recommends.
         return json.dumps(value)
 
     def _string(self, value: str) -> str:
@@ -249,8 +277,16 @@ class _Encoder:
 
     # ---------------------------------------------------------------- arrays
 
-    def array(self, key: str | None, items: list, depth: int) -> list[str]:
-        """Encode an array in whichever of the three array forms its shape requires."""
+    def array(
+        self, key: str | None, items: list, depth: int, *, allow_tabular: bool = True
+    ) -> list[str]:
+        """Encode an array in whichever of the three array forms its shape requires.
+
+        ``allow_tabular`` is false in list-item position: a tabular header is a
+        keyless fields-bearing header there, which section 6 allows only at the
+        document root, so section 9.4 requires list form however uniform the
+        items are.
+        """
         pad = self.pad(depth)
         prefix = key or ""
         if not items:
@@ -261,7 +297,7 @@ class _Encoder:
             values = self.delim.join(self.primitive(item) for item in items)
             return [f"{pad}{prefix}{self.bracket(len(items))}: {values}"]
 
-        fields = self.tabular_fields(items)
+        fields = self.tabular_fields(items) if allow_tabular else None
         if fields is not None:
             head = f"{pad}{prefix}{self.bracket(len(items))}{{{self.field_list(fields)}}}:"
             return [head, *(f"{self.pad(depth + 1)}{self.row(item, fields)}" for item in items)]
@@ -283,7 +319,9 @@ class _Encoder:
                 return [f"{pad}- {self.bracket(0)}:"]
             # A keyless header on a hyphen line is the item itself, so it stands
             # at this depth and its own content sits one deeper (section 10).
-            return self._hyphenate(self.array(None, value, depth), depth, depth)
+            return self._hyphenate(
+                self.array(None, value, depth, allow_tabular=False), depth, depth
+            )
 
         if isinstance(value, dict):
             if not value:

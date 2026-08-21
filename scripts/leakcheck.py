@@ -34,6 +34,10 @@ named rules. The exemption is deliberately per-rule: a blanket marker would
 switch off every rule on the line, including one nobody was thinking about when
 they wrote it, which is how a live credential hides behind a suppressed lint.
 
+PATH_ALLOWANCES says the same thing for a file that cannot carry a marker at
+all. It is per-path AND per-rule for the same reason, and `--rules` prints it,
+because an exemption nobody can see is one nobody re-examines.
+
 Standard library only, so the hooks run without the project's virtualenv.
 """
 
@@ -179,6 +183,33 @@ RULES = [
 
 RULES_BY_NAME = {rule.name: rule for rule in RULES}
 
+#: Files exempt from one named rule each, for content that cannot carry a
+#: `leakcheck: allow=` marker. JSON has no comment syntax, and these files are
+#: third-party data vendored byte-for-byte -- editing one to satisfy this
+#: scanner would replace the specification's opinion with ours, which is the
+#: opposite of what a conformance fixture is for. Scoped exactly like the
+#: per-line marker: one path, one rule, every other rule still runs.
+PATH_ALLOWANCES = {
+    # One upstream case escapes backslashes in a synthetic Windows drive path
+    # under the users directory. It names nobody and reaches nothing -- and the
+    # shape is deliberately not repeated here, or this file would trip too.
+    "tests/fixtures/toon-spec/encode/primitives.json": frozenset({"home-path"}),
+}
+
+
+def path_allowances(path):
+    """Rule names ``path`` is exempt from, whatever the scan was rooted at.
+
+    Callers pass repository-relative names, but an absolute one arrives when a
+    scan is pointed at a directory from outside it, so a trailing match counts.
+    """
+    name = str(path)
+    for candidate, rules in PATH_ALLOWANCES.items():
+        if name == candidate or name.endswith("/" + candidate):
+            return rules
+    return frozenset()
+
+
 SKIP_DIRECTORIES = {
     ".git",
     ".venv",
@@ -261,9 +292,10 @@ def scan_text(path, text):
     """Scan one file's content with both the line pass and the condensed pass."""
     findings = []
     seen = set()
+    by_path = path_allowances(path)
 
     for number, line in enumerate(text.splitlines(), start=1):
-        exempt = allowed_rules(line)
+        exempt = allowed_rules(line) | by_path
         for variant in _decoded_variants(line):
             for rule in RULES:
                 if rule.name in exempt:
@@ -274,12 +306,12 @@ def scan_text(path, text):
                         seen.add(finding.key)
                         findings.append(finding)
 
-    findings.extend(_scan_condensed(path, text, seen))
+    findings.extend(_scan_condensed(path, text, seen, by_path))
     findings.sort(key=lambda f: (f.line_number, f.rule.name))
     return findings
 
 
-def _scan_condensed(path, text, seen):
+def _scan_condensed(path, text, seen, by_path):
     """Re-scan the whole file with source-level separators removed."""
     condensed_chars = []
     line_of = []
@@ -303,7 +335,7 @@ def _scan_condensed(path, text, seen):
                 continue
             for match in rule.scan(variant):
                 start = offsets[match.start()] if match.start() < len(offsets) else 1
-                if _line_is_exempt(text, start, rule.name):
+                if rule.name in by_path or _line_is_exempt(text, start, rule.name):
                     continue
                 finding = Finding(
                     path, start, rule, _excerpt(variant, match), match.group(0), pass_name="joined"
@@ -520,8 +552,12 @@ def list_rules():
     for rule in RULES:
         passes = "line+joined" if rule.condensed else "line"
         print(f"  {rule.name},{passes},{rule.message}")
+    print(f"allowances[{len(PATH_ALLOWANCES)}]{{path,rules}}:")
+    for candidate, names in sorted(PATH_ALLOWANCES.items()):
+        print(f"  {candidate},{'|'.join(sorted(names))}")
     print("help:")
     print(f"  Exempt one line from one rule with `{ALLOW_PREFIX}<rule>`")
+    print("  A file that cannot carry a marker is exempted per rule in PATH_ALLOWANCES")
     return 0
 
 
