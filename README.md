@@ -290,7 +290,7 @@ Covered by tests:
 
 - the TOON encoder against the specification's rules — tabular, keyed tabular, list and inline
   forms, quoting, escaping, delimiters, root forms — **and against the specification's own encode
-  fixtures**, all 179 of them, vendored byte-for-byte from
+  fixtures**, every one of them, vendored byte-for-byte from
   [`toon-format/spec`](https://github.com/toon-format/spec) and run on every `pytest`. The case
   count is asserted too, so a fixture that stops being collected fails the suite instead of
   quietly lowering the score;

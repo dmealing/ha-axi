@@ -58,11 +58,12 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   command modules return plain JSON-shaped dicts. Do not loosen it to make output prettier. Two
   suites cover it and they are not interchangeable: `tests/test_toon.py` states the behaviour in
   this project's words, and `tests/test_toon_conformance.py` runs the specification's own encode
-  fixtures — all 179 of them, vendored byte-for-byte from `toon-format/spec` under
+  fixtures — every one of them, vendored byte-for-byte from `toon-format/spec` under
   `tests/fixtures/toon-spec/` (MIT; provenance, checksums and the refresh recipe live in
-  `PROVENANCE.md` beside them). The count is asserted, so a fixture that stops being collected
-  fails instead of shrinking the score. A rule nobody thought to write a test for reads as passing,
-  which is how 177/179 shipped in 0.3.0 while the README claimed strictness.
+  `PROVENANCE.md` beside them). `CASE_COUNT` there is the only place the case count is written,
+  and it is asserted, so a fixture that stops being collected fails instead of shrinking the
+  score. A rule nobody thought to write a test for reads as passing, which is how 0.3.0 shipped
+  two failing cases while the README claimed strictness.
 - `output.py` — the single place anything reaches stdout, and therefore the only place redaction
   has to hold. `HelpBlock` is the one deliberate departure from strict TOON: `help[N]:` blocks
   render one suggestion per line, matching the AXI standard and the sibling AXI CLIs, because the

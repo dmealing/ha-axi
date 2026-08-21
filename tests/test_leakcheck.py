@@ -175,9 +175,27 @@ def test_a_path_allowance_exempts_no_other_file():
     assert rule_names(findings) == ["home-path", "private-ip"]
 
 
-def test_a_path_allowance_holds_when_the_scan_is_rooted_outside_the_repository():
-    assert leakcheck.path_allowances(f"/scan/root/{ALLOWED_PATH}") == frozenset({"home-path"})
-    assert leakcheck.path_allowances(f"decoy/{ALLOWED_PATH}.bak") == frozenset()
+def test_an_allowance_matches_only_the_exact_path_it_names():
+    """A path that merely ends with an allowed one -- a shadowing directory, a
+    suffixed twin, a scan rooted elsewhere -- is a different file, and exempting
+    it would grant the entry every directory it is ever copied into."""
+    assert leakcheck.path_allowances(ALLOWED_PATH) == frozenset({"home-path"})
+    assert leakcheck.path_allowances(f"attic/{ALLOWED_PATH}") == frozenset()
+    assert leakcheck.path_allowances(f"/scan/root/{ALLOWED_PATH}") == frozenset()
+    assert leakcheck.path_allowances(f"{ALLOWED_PATH}.bak") == frozenset()
+
+
+#: The exact shapes each exempted file still trips with the allowances switched
+#: off, so a refreshed fixture that changes one -- or grows a second -- fails the
+#: suite instead of quietly widening what the entry covers. Assembled from
+#: fragments like DIRTY, so this file stays clean under its own scanner.
+EXPECTED_SHAPES = {
+    ALLOWED_PATH: frozenset({"C:" + "\\\\" + "Users" + "\\\\" + "path"}),
+}
+
+
+def test_every_expected_shape_entry_names_a_live_allowance():
+    assert sorted(EXPECTED_SHAPES) == sorted(leakcheck.PATH_ALLOWANCES)
 
 
 @pytest.mark.parametrize("path", sorted(leakcheck.PATH_ALLOWANCES))
@@ -186,16 +204,20 @@ def test_every_path_allowance_is_still_earning_its_place(path, monkeypatch):
 
     Scanning the real file with allowances switched off must fire exactly the
     rules the entry names -- no fewer, or the entry is dead and should go; no
-    more, or it is covering something nobody agreed to.
+    more, or it is covering something nobody agreed to -- and exactly the shapes
+    recorded beside it, so a vendored refresh cannot change what is exempted
+    without the change being visible here.
     """
     allowed = leakcheck.PATH_ALLOWANCES[path]
     assert allowed <= set(leakcheck.RULES_BY_NAME), "allowance names an undeclared rule"
+    expected = EXPECTED_SHAPES[path]
     target = REPO_ROOT / path
     assert target.is_file(), "allowance names a file that is no longer here"
 
     monkeypatch.setattr(leakcheck, "PATH_ALLOWANCES", {})
     findings = leakcheck.scan_text(path, target.read_text(encoding="utf-8"))
     assert rule_names(findings) == sorted(allowed)
+    assert {finding.matched for finding in findings} == expected
 
 
 # ------------------------------------------------------------------ email

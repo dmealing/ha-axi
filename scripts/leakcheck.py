@@ -198,16 +198,14 @@ PATH_ALLOWANCES = {
 
 
 def path_allowances(path):
-    """Rule names ``path`` is exempt from, whatever the scan was rooted at.
+    """Rule names ``path`` is exempt from.
 
-    Callers pass repository-relative names, but an absolute one arrives when a
-    scan is pointed at a directory from outside it, so a trailing match counts.
+    Compared exactly against the repository-relative name the caller holds. A
+    path that merely ends with an allowed one is a different file -- a shadowing
+    directory, a suffixed twin -- and exempting it would grant the entry every
+    directory it is ever copied into.
     """
-    name = str(path)
-    for candidate, rules in PATH_ALLOWANCES.items():
-        if name == candidate or name.endswith("/" + candidate):
-            return rules
-    return frozenset()
+    return PATH_ALLOWANCES.get(str(path), frozenset())
 
 
 SKIP_DIRECTORIES = {

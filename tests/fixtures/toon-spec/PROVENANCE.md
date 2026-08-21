@@ -41,6 +41,13 @@ pytest tests/test_toon_conformance.py
 ```
 
 Then update the table above with the new commit and version, and update `CASE_COUNT` in
-`tests/test_toon_conformance.py` if upstream added cases. A refresh that changes an expected output
-is a specification change and belongs in its own commit, separate from any encoder change made to
-satisfy it.
+`tests/test_toon_conformance.py` if upstream added cases — it is the only place the case count is
+written, and the prose in the README and AGENTS.md deliberately stays number-free. A refresh that
+changes an expected output is a specification change and belongs in its own commit, separate from
+any encoder change made to satisfy it.
+
+Re-vendoring rewrites `checksums.txt` in the same commit, so no automated gate compares the new
+content against the old: re-read what the `PATH_ALLOWANCES` entry in `scripts/leakcheck.py` now
+covers before committing. The suite does pin the shapes an entry exempts — a refresh that changes
+them fails `test_every_path_allowance_is_still_earning_its_place` — but only a person can confirm
+a new shape still names nobody and reaches nothing.
