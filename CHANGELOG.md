@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/dmealing/ha-axi/compare/v0.3.0...v0.3.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **toon:** satisfy both TOON spec MUST violations, enforced by vendored fixtures ([#9](https://github.com/dmealing/ha-axi/issues/9)) ([46c25f9](https://github.com/dmealing/ha-axi/commit/46c25f9916b7b19dddc297dfcdeae8630158a508))
+
 ## [0.3.0](https://github.com/dmealing/ha-axi/compare/v0.2.0...v0.3.0) (2026-08-19)
 
 
