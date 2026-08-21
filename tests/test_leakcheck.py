@@ -155,6 +155,71 @@ def test_the_allow_marker_also_applies_to_the_condensed_pass():
     assert leakcheck.scan_text("f.txt", source) == []
 
 
+# -------------------------------------------------------- path allowances
+#
+# The marker is a comment, so a JSON file cannot carry one. PATH_ALLOWANCES is
+# how vendored data that must stay byte-for-byte is exempted instead, and these
+# tests hold it to the same scope the marker has.
+
+
+ALLOWED_PATH = "tests/fixtures/toon-spec/encode/primitives.json"
+TWO_SHAPES = "path " + "/ho" + "me/" + "someone" + "/notes and " + "192." + "168.1.10"
+
+
+def test_a_path_allowance_exempts_only_the_rule_it_names():
+    assert rule_names(leakcheck.scan_text(ALLOWED_PATH, TWO_SHAPES + "\n")) == ["private-ip"]
+
+
+def test_a_path_allowance_exempts_no_other_file():
+    findings = leakcheck.scan_text("src/ha_axi/toon.py", TWO_SHAPES + "\n")
+    assert rule_names(findings) == ["home-path", "private-ip"]
+
+
+def test_an_allowance_matches_only_the_exact_path_it_names():
+    """A path that merely ends with an allowed one -- a shadowing directory, a
+    suffixed twin, a scan rooted elsewhere -- is a different file, and exempting
+    it would grant the entry every directory it is ever copied into."""
+    assert leakcheck.path_allowances(ALLOWED_PATH) == frozenset({"home-path"})
+    assert leakcheck.path_allowances(f"attic/{ALLOWED_PATH}") == frozenset()
+    assert leakcheck.path_allowances(f"/scan/root/{ALLOWED_PATH}") == frozenset()
+    assert leakcheck.path_allowances(f"{ALLOWED_PATH}.bak") == frozenset()
+
+
+#: The exact shapes each exempted file still trips with the allowances switched
+#: off, so a refreshed fixture that changes one -- or grows a second -- fails the
+#: suite instead of quietly widening what the entry covers. Assembled from
+#: fragments like DIRTY, so this file stays clean under its own scanner.
+EXPECTED_SHAPES = {
+    ALLOWED_PATH: frozenset({"C:" + "\\\\" + "Users" + "\\\\" + "path"}),
+}
+
+
+def test_every_expected_shape_entry_names_a_live_allowance():
+    assert sorted(EXPECTED_SHAPES) == sorted(leakcheck.PATH_ALLOWANCES)
+
+
+@pytest.mark.parametrize("path", sorted(leakcheck.PATH_ALLOWANCES))
+def test_every_path_allowance_is_still_earning_its_place(path, monkeypatch):
+    """Stale is as bad as blanket: an exemption outlives what it was granted for.
+
+    Scanning the real file with allowances switched off must fire exactly the
+    rules the entry names -- no fewer, or the entry is dead and should go; no
+    more, or it is covering something nobody agreed to -- and exactly the shapes
+    recorded beside it, so a vendored refresh cannot change what is exempted
+    without the change being visible here.
+    """
+    allowed = leakcheck.PATH_ALLOWANCES[path]
+    assert allowed <= set(leakcheck.RULES_BY_NAME), "allowance names an undeclared rule"
+    expected = EXPECTED_SHAPES[path]
+    target = REPO_ROOT / path
+    assert target.is_file(), "allowance names a file that is no longer here"
+
+    monkeypatch.setattr(leakcheck, "PATH_ALLOWANCES", {})
+    findings = leakcheck.scan_text(path, target.read_text(encoding="utf-8"))
+    assert rule_names(findings) == sorted(allowed)
+    assert {finding.matched for finding in findings} == expected
+
+
 # ------------------------------------------------------------------ email
 
 

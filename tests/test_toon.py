@@ -58,6 +58,27 @@ def test_inner_empty_array_item_uses_a_zero_header():
     assert encode({"items": [[], [1]]}) == "items[2]:\n  - [0]:\n  - [1]: 1"
 
 
+def test_tabular_form_is_unavailable_in_list_item_position():
+    """Section 9.4: uniform inner arrays still take list form.
+
+    A tabular header on a hyphen line would be a keyless fields-bearing header,
+    which section 6 allows only at the document root, so however tabular-eligible
+    the items are the encoder MUST fall back to list form here.
+    """
+    assert encode({"a": [[{"x": 1}, {"x": 2}]]}) == "a[1]:\n  - [2]:\n    - x: 1\n    - x: 2"
+
+
+def test_the_list_form_fallback_survives_further_nesting():
+    doc = {"a": [[[{"x": 1}]]]}
+    assert encode(doc) == "a[1]:\n  - [1]:\n    - [1]:\n      - x: 1"
+
+
+def test_a_key_still_reaches_tabular_form_from_inside_a_list_item():
+    """The restriction is the position, not the depth: a key can carry a header."""
+    doc = {"a": [{"rows": [{"x": 1}, {"x": 2}]}]}
+    assert encode(doc) == "a[1]:\n  - rows[2]{x}:\n      1\n      2"
+
+
 def test_list_item_object_with_tabular_first_field_indents_rows_two_levels():
     doc = {"outer": [{"rows": [{"a": 1}, {"a": 2}], "note": "hi"}]}
     assert encode(doc) == "outer[1]:\n  - rows[2]{a}:\n      1\n      2\n    note: hi"
@@ -106,6 +127,58 @@ def test_primitive_encoding(value, expected):
 def test_non_finite_numbers_normalize_to_null():
     assert encode({"k": float("nan")}) == "k: null"
     assert encode({"k": float("inf")}) == "k: null"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.0, "0"),
+        (-0.0, "0"),
+        (1e-6, "0.000001"),
+        (1e-5, "0.00001"),
+        (1.5e-5, "0.000015"),
+        (-2.5e-5, "-0.000025"),
+        (0.0001, "0.0001"),
+        (0.1 + 0.2, "0.30000000000000004"),
+        (1e15, "1000000000000000"),
+        (1e16, "10000000000000000"),
+        (1e20, "100000000000000000000"),
+        (1.2345678901234568e17, "123456789012345680"),
+        (-1e18, "-1000000000000000000"),
+    ],
+)
+def test_canonical_decimal_form_is_used_across_the_required_range(value, expected):
+    """Section 2: 0 and 1e-6 <= |n| < 1e21 MUST carry no exponent.
+
+    Python's float repr leaves that range at both ends, so the two bands either
+    side of it -- a current reading in amps, a byte counter -- are exactly where
+    a repr-based encoder stops conforming.
+    """
+    assert encode({"k": value}) == f"k: {expected}"
+    assert float(expected) == value, "the emitted form must still round-trip"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1e21, "1e+21"), (5e-7, "5e-07"), (1e-300, "1e-300"), (-1.5e22, "-1.5e+22")],
+)
+def test_exponent_notation_is_kept_for_magnitudes_outside_that_range(value, expected):
+    """Section 2 permits an exponent there, and recommends this exact spelling."""
+    assert encode({"k": value}) == f"k: {expected}"
+
+
+def test_a_small_sensor_reading_survives_the_document_boundary():
+    """The reachable case: an attribute in either band, as `state get --full` prints it."""
+    doc = {
+        "entity_id": "sensor.example_current",
+        "attributes": {"current": 1.5e-05, "lifetime_bytes": 1.8e16},
+    }
+    assert encode(doc) == (
+        "entity_id: sensor.example_current\n"
+        "attributes:\n"
+        "  current: 0.000015\n"
+        "  lifetime_bytes: 18000000000000000"
+    )
 
 
 def test_keys_are_quoted_only_when_required():

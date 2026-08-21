@@ -34,6 +34,14 @@ rather than passing silently. If the scanner flags a line that legitimately need
 `leakcheck: allow=<rule>` on that line — scoped to that one rule, never blanket. Do not weaken a
 rule to make a commit pass, and do not bypass the hooks.
 
+**A file that cannot carry a marker** — JSON has no comment syntax, and vendored third-party data
+must stay byte-for-byte — is exempted in `PATH_ALLOWANCES` in `scripts/leakcheck.py` instead, per
+path *and* per rule, and `--rules` prints the table so the exemption is visible where the rules
+are. There is one entry today: the vendored TOON fixture whose backslash-escaping case is a
+synthetic Windows drive path. `tests/test_leakcheck.py` re-scans each exempted file with the table
+switched off and asserts the rules that fire are exactly the ones the entry names — an entry that
+has outlived its cause fails the suite rather than quietly covering something new.
+
 **Writing tests for the guard:** build credential shapes at run time — `leakcheck.synthetic_jwt()`
 base64-encodes a payload rather than embedding an `eyJ...` literal — because the condensed pass
 joins the whole file before re-scanning and will (correctly) find a literal split across lines.
@@ -47,8 +55,15 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 ## Architecture
 
 - `toon.py` — a strict TOON encoder (spec v4.1). Encoding happens **only** at the output boundary;
-  command modules return plain JSON-shaped dicts. Covered by conformance tests in
-  `tests/test_toon.py`; do not loosen it to make output prettier.
+  command modules return plain JSON-shaped dicts. Do not loosen it to make output prettier. Two
+  suites cover it and they are not interchangeable: `tests/test_toon.py` states the behaviour in
+  this project's words, and `tests/test_toon_conformance.py` runs the specification's own encode
+  fixtures — every one of them, vendored byte-for-byte from `toon-format/spec` under
+  `tests/fixtures/toon-spec/` (MIT; provenance, checksums and the refresh recipe live in
+  `PROVENANCE.md` beside them). `CASE_COUNT` there is the only place the case count is written,
+  and it is asserted, so a fixture that stops being collected fails instead of shrinking the
+  score. A rule nobody thought to write a test for reads as passing, which is how 0.3.0 shipped
+  two failing cases while the README claimed strictness.
 - `output.py` — the single place anything reaches stdout, and therefore the only place redaction
   has to hold. `HelpBlock` is the one deliberate departure from strict TOON: `help[N]:` blocks
   render one suggestion per line, matching the AXI standard and the sibling AXI CLIs, because the
@@ -86,6 +101,19 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 
 ### Sharp edges
 
+- **The canonical decimal range is wider than Python's float repr.** Spec section 2 makes decimal
+  form a MUST for `0` and for `1e-6 <= |n| < 1e21`; `repr` leaves decimal form outside roughly
+  `[1e-4, 1e16)`, so `json.dumps` alone violates that MUST in the band at each end — and both bands
+  are ordinary sensor data (a current reading in amps, a byte counter), reachable through
+  `state get --full`. `_number` formats through `Decimal(repr(value))` inside the range and defers
+  to `json.dumps` outside it, where an exponent is permitted. `Decimal(value)` would be wrong:
+  it expands the exact binary value instead of the shortest round-tripping digits.
+- **Tabular form is not available in list-item position.** A tabular header on a hyphen line is a
+  keyless fields-bearing header, which section 6 allows only at the document root, so section 9.4
+  requires list form however uniform the items are. `array()` carries `allow_tabular` and
+  `list_item()` passes `False`; the restriction is the position, not the depth, so a *key* inside a
+  list-item object still reaches tabular form. Reachable through `api` and `ws --raw`, which hand
+  arbitrary Home Assistant JSON to the encoder.
 - **Null is meaningful over WebSocket.** `config/entity_registry/update` with `name: null` is how a
   user override is cleared, so `WsClient.send_command` must not filter `None` out of a payload.
   It did once; `--clear-name` silently did nothing. There is a test for this.
@@ -218,10 +246,14 @@ nothing signals when.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~380 tests, a couple of seconds
+pytest                                   # ~590 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
+
+**Do not edit a vendored conformance fixture.** If one fails, the encoder is wrong until proven
+otherwise; the checksum test will catch the edit anyway. Refreshing them from upstream is its own
+commit, separate from any encoder change made to satisfy it, and `PROVENANCE.md` carries the recipe.
 
 **Tests never need a live installation or a live token, and must not start to.** They run against
 real loopback servers in `tests/conftest.py`: an `http.server` for REST and a real `websockets`

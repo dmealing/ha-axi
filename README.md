@@ -190,7 +190,9 @@ states[2]{entity_id,name,state}:
 
 One documented deviation: `help[N]:` blocks render one suggestion per line rather than as a
 delimiter-joined TOON array. Suggestions are command lines that routinely contain commas, and this
-is the shape the AXI standard and the sibling AXI CLIs use. Every **data** structure is strict TOON.
+is the shape the AXI standard and the sibling AXI CLIs use. Every **data** structure is strict TOON,
+and "strict" is a test result rather than a claim: the specification's own conformance fixtures are
+vendored into the suite and every one of them has to pass.
 
 ## Agent integration
 
@@ -287,7 +289,11 @@ performs the same `auth_required` / `auth` / `auth_ok` handshake Home Assistant 
 Covered by tests:
 
 - the TOON encoder against the specification's rules — tabular, keyed tabular, list and inline
-  forms, quoting, escaping, delimiters, root forms;
+  forms, quoting, escaping, delimiters, root forms — **and against the specification's own encode
+  fixtures**, every one of them, vendored byte-for-byte from
+  [`toon-format/spec`](https://github.com/toon-format/spec) and run on every `pytest`. The case
+  count is asserted too, so a fixture that stops being collected fails the suite instead of
+  quietly lowering the score;
 - every command's output shape, filters, field selection, limits and empty states;
 - the WebSocket protocol beyond the happy path: the handshake, an unexpected greeting, a message
   arriving mid-authentication, auth rejection, event and pong frames interleaved with results, id
@@ -342,4 +348,8 @@ succeeds.
 
 ## License
 
-MIT
+MIT.
+
+`tests/fixtures/toon-spec/` vendors the TOON specification's conformance fixtures, which are MIT
+licensed and copyright their authors; the upstream licence, the commit they came from and the
+refresh recipe are recorded beside them in `PROVENANCE.md`.
