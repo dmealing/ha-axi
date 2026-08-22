@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ha-axi"
-version = "0.3.3"
+version = "0.3.4"
 description = "Agent eXperience Interface (AXI) CLI for the Home Assistant REST and WebSocket APIs"
 readme = "README.md"
 license = { text = "MIT" }
