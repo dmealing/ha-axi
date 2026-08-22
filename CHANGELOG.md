@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/dmealing/ha-axi/compare/v0.3.3...v0.3.4) (2026-08-22)
+
+
+### Bug Fixes
+
+* **ci:** scan the pull request title and body, the surface no hook reaches ([#16](https://github.com/dmealing/ha-axi/issues/16)) ([cf0f812](https://github.com/dmealing/ha-axi/commit/cf0f812b28c96a53fff26417cc94c7be6ad2c8fb))
+
 ## [0.3.3](https://github.com/dmealing/ha-axi/compare/v0.3.2...v0.3.3) (2026-08-22)
 
 
