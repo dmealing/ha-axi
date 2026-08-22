@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/dmealing/ha-axi/compare/v0.3.2...v0.3.3) (2026-08-22)
+
+
+### Bug Fixes
+
+* **commands:** name entities the way Home Assistant does, plus a live audit's fixes ([#14](https://github.com/dmealing/ha-axi/issues/14)) ([0014b97](https://github.com/dmealing/ha-axi/commit/0014b9787976373808c59763d29c898d152212a0))
+
 ## [0.3.2](https://github.com/dmealing/ha-axi/compare/v0.3.1...v0.3.2) (2026-08-22)
 
 
