@@ -589,9 +589,7 @@ def test_entity_list_rejects_a_device_id_no_device_has(run_cli, ws_env):
     assert "Run `ha-axi device list --fields device_id,name` to see each device's id" in out
 
 
-def test_entity_list_keeps_the_zero_for_a_device_that_supplies_nothing(
-    run_cli, ws_env, ws_server
-):
+def test_entity_list_keeps_the_zero_for_a_device_that_supplies_nothing(run_cli, ws_env, ws_server):
     """A real device with no entities is an empty result, not a lookup failure.
 
     `this device has no entities` and `this id is not a device` are different

@@ -571,9 +571,7 @@ def test_a_response_call_that_matched_only_unavailable_entities_names_them(
     assert "to see the fields it takes" not in out
 
 
-def test_the_same_call_without_response_keeps_reporting_the_silent_skip(
-    run_cli, installation_env
-):
+def test_the_same_call_without_response_keeps_reporting_the_silent_skip(run_cli, installation_env):
     """The 200 half of the pair is a report, not a refusal.
 
     Without `--response`, Home Assistant answers the skipped entity with an
@@ -601,9 +599,7 @@ def test_the_same_call_without_response_keeps_reporting_the_silent_skip(
     assert "NO_ENTITIES_TARGETED" not in out
 
 
-def test_a_no_check_response_call_names_the_capability_it_lacked(
-    run_cli, installation_env
-):
+def test_a_no_check_response_call_names_the_capability_it_lacked(run_cli, installation_env):
     """The same verdict for the other filter Home Assistant applies.
 
     Under `--no-check` an incapable entity stays in the target, and once every
@@ -625,9 +621,7 @@ def test_a_no_check_response_call_names_the_capability_it_lacked(
     )
     assert code == 1
     assert "NO_ENTITIES_TARGETED" in out
-    assert (
-        f"media_player.example_speaker reports 3, not any of {FEATURE_NEXT_TRACK}" in out
-    )
+    assert f"media_player.example_speaker reports 3, not any of {FEATURE_NEXT_TRACK}" in out
     assert "which Home Assistant skips before matching" in out
     assert "to see the fields it takes" not in out
 

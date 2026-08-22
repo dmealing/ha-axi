@@ -212,10 +212,12 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   exactly the service's own domain, and nothing if a value did not resolve to an integer.
 - **The capability gate is a pre-check for area and device targets only.** Home Assistant refuses
   an entity *named outright* that lacks the feature, but skips one reached through an area or a
-  device in silence — 200 with an empty list, and nothing said. So the pre-check covers the silent
-  half, and the loud half is enriched on the failure path where it is free. `--no-check` exists
-  because a published requirement is an integration's claim about itself, and a wrong one must not
-  become a wall.
+  device in silence — 200 with an empty list, and nothing said. An `unavailable` entity is skipped
+  just as silently however it was named — its capability is never read — so neither the pre-check
+  nor the failure-path enrichment blames it for lacking one. The pre-check covers the silent half,
+  and the loud half is enriched on the failure path where it is free. `--no-check` exists because
+  a published requirement is an integration's claim about itself, and a wrong one must not become
+  a wall.
 - **An empty change set is two different answers.** Home Assistant returns the states that actually
   changed, so `[]` means both "everything was already as asked" and "nothing was reached at all" —
   and it never says which. `service call` resolves the target when, and only when, the change set

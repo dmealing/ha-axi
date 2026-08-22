@@ -649,8 +649,7 @@ def _no_entities_targeted(
     scope = _scope_phrase(parsed)
     opening = skipped or f"matched 0 entities {domain}.{service} can act on"
     return NotFound(
-        f"{scope} {opening}, so the call did nothing"
-        + (f" ({'; '.join(parts)})" if parts else ""),
+        f"{scope} {opening}, so the call did nothing" + (f" ({'; '.join(parts)})" if parts else ""),
         help_lines=_target_help(domain, service, parsed),
         code="NO_ENTITIES_TARGETED",
     )
