@@ -237,6 +237,7 @@ by a convention:
 scripts/leakcheck.py            # scan every tracked file
 scripts/leakcheck.py --staged   # scan what a commit would actually record
 scripts/leakcheck.py --commit-msg <path>   # scan a commit message
+scripts/leakcheck.py --pull-request <n>    # scan a pull request's title and body
 scripts/leakcheck.py --rules    # list the rules and what each one catches
 scripts/leakcheck.py --demo     # self-test: prove every rule still fires
 ```
@@ -263,7 +264,7 @@ exemption is **per rule on purpose** — a blanket marker would switch off every
 including one nobody was thinking about, which is how a live credential hides behind a suppressed
 lint.
 
-It runs in three places:
+It runs in four places:
 
 ```sh
 scripts/install-hooks.sh   # points core.hooksPath at .githooks
@@ -275,6 +276,14 @@ scripts/install-hooks.sh   # points core.hooksPath at .githooks
   just as public.
 - **CI** runs `--demo` first — proving the scanner still detects what it claims — and then scans
   the whole tree. Bypassing the local hooks only delays the failure.
+- **The pull request itself**, on every open, push *and edit*. A title and a body are published the
+  moment they are written, are in no checkout and pass under no hook, so nothing above reaches them
+  — and tooling routinely pastes captured output into a body, where a `pytest` header carries a
+  `rootdir:` line holding an absolute path. It fails the check when it cannot read the pull request
+  rather than reporting a clean it cannot support, and it reports the field, line and offset of a
+  match without printing the match: a CI log is more public than the page it came from. For the same
+  reason a pull request cannot carry an `allow=` marker — in a file that marker is committed and
+  reviewed, and in a body it is an off-switch anyone can add after every check has run.
 
 A commit message is checked as well as scanned. release-please builds the changelog and the version
 bump from commit messages, and when its parser cannot read one it says so at debug level, drops the
