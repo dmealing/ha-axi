@@ -13,14 +13,26 @@
 # quality signal here. Keep this workflow to the one cheap job; adding the
 # matrix back would restore the duplicate-run waste it was split up to end.
 #
-# The last step here is the one exception to that, and it is not coverage for
-# its own sake: it checks something that exists ONLY on a pull request. A pull
-# request body that names release-please's commit-override marker replaces the
-# merged commit message with whatever follows the word, and a paragraph *about*
-# the mechanism is enough to do it. That body never passes under the commit-msg
-# hook, is not in the checkout, and can be edited after every other check has
-# run — so `edited` is in the trigger list. It has already cost the sibling
-# project a release. Still one job, still seconds.
+# The two steps that read the pull request itself are the one exception to
+# that, and they are not coverage for their own sake: they check something
+# that exists ONLY on a pull request. A title and a body are in no checkout,
+# pass under no hook, and can be edited after every other check has run — so
+# `edited` is in the trigger list, and two separate guards depend on it
+# being there.
+#
+# The first is a leak scan of the title and body. This repository is public and
+# the pipeline's own document step writes into the body, pasting captured pytest
+# output whose header carries a `rootdir:` line holding an absolute path. That
+# has published a home directory twice, on two repositories, with every check
+# green both times — because nothing scanned the one artefact that is neither a
+# tracked file nor a commit message. `edited` is what makes it work at all: the
+# document step writes the evidence in *after* the pull request is opened, so a
+# check that fired only on `opened` would pass the empty original body.
+#
+# The second is release-please's: a body that names the commit-override marker
+# replaces the merged commit message with whatever follows the word, and a
+# paragraph *about* the mechanism is enough to do it. It has already cost the
+# sibling project a release. Still one job, still seconds.
 name: hygiene
 
 on:
@@ -53,6 +65,14 @@ jobs:
         run: python3 scripts/leakcheck.py --demo
       - name: Scan every tracked file
         run: python3 scripts/leakcheck.py
+      # The surface no hook and no checkout can reach. Fails closed: without a
+      # token, or on a fetch that does not answer, it fails the check rather than
+      # reporting a clean it cannot support. It reports the field, line and
+      # offset of a match and never the match itself — this log is public.
+      - name: Scan the pull request title and body
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/leakcheck.py --pull-request "${{ github.event.pull_request.number }}"
       # Same discipline as the scan above: prove the checker still tells the
       # shapes apart before believing its verdict on this pull request.
       - name: Self-test the commit checker

@@ -24,6 +24,7 @@ repo, including tests, fixtures, docs, examples and commit messages:
 scripts/leakcheck.py                     # every tracked file
 scripts/leakcheck.py --staged            # what a commit would record (pre-commit hook)
 scripts/leakcheck.py --commit-msg PATH   # the message itself (commit-msg hook)
+scripts/leakcheck.py --pull-request N    # a pull request's title and body (hygiene.yml)
 scripts/leakcheck.py --rules             # the live rule list
 scripts/leakcheck.py --demo              # self-test: proves every rule still fires
 scripts/install-hooks.sh                 # sets core.hooksPath to .githooks
@@ -47,6 +48,51 @@ base64-encodes a payload rather than embedding an `eyJ...` literal — because t
 joins the whole file before re-scanning and will (correctly) find a literal split across lines.
 Address shapes may be written as fragments, since the condensed pass deliberately runs only the
 token rules.
+
+**There are three surfaces, and the third one is not a file.** A pull request title and body are
+published the moment they are written, are in no checkout, pass under no hook, and can be edited
+after every other check has run — so neither the tracked-file scan nor `--commit-msg` has ever seen
+one. That is not theoretical: the pipeline's own document step writes into the body, pasting
+captured pytest output, and a pytest header carries a `rootdir:` line holding an absolute path. It
+has published a home directory twice, once here and once on the sibling project, with every check
+green both times, because the only check that read the body at all — `commitcheck --pull-request` —
+was reading it for a different question and answering that one correctly. **The rules were never the
+problem; the reach was**, which is why `--pull-request` reuses `RULES` and `scan_text` outright
+rather than growing a second pattern list. A rule added later covers all three surfaces with nobody
+remembering to wire it up.
+
+**Captured tool output was the leak source twice over, and the second one was the scanner's own
+self-test.** `--demo` prints what each rule caught to prove the rules fire — and those samples are
+leak-shaped by construction, so pasting the demo's output into a body as evidence fails the very
+check it opens, which is what happened to the pull request that introduced that check. The demo
+therefore reports every finding without the value, the way the pull request reporter already did,
+and `tests/test_leakcheck.py` pins that the demo's output passes the pull request scan.
+
+Three things about that scan are load-bearing:
+
+- **`edited` in `hygiene.yml`'s trigger list is the whole mechanism.** The document step writes the
+  evidence into the body *after* the pull request is opened, so a check firing only on `opened` and
+  `synchronize` would scan the empty original body and pass. Two separate guards now depend on that
+  trigger; `tests/test_leakcheck.py` asserts it is still there.
+- **It fails closed, in both directions.** No token, no `owner/name`, a fetch that does not answer,
+  an answer that is not a pull request, or an empty `RULES` — every one of them fails the check
+  rather than reporting a clean it cannot support. `0 findings` from a guard that never saw the
+  artefact converts an unknown risk into a false assurance, which is worse than not running.
+- **The report names the field, line, rule and offset, and never the match.** A pull request check
+  runs on a public log; printing the excerpt the file report prints would republish the leak to a
+  wider audience than the pull request page. The offset is printed only when the finding's pass read
+  the text as written — one surfaced in a percent-decoded or joined view indexes a string that
+  exists nowhere the reader can open, so it prints `-` and the pass column instead. For the same
+  reason a pull request cannot carry a `leakcheck: allow=` marker — in a file that marker is
+  committed, diffed and reviewed, and in a body it is an off-switch anyone can add after every
+  check has run. An attribution trailer is still
+  exempt from the address rule alone, because GitHub's squash box offers the body as the commit
+  message.
+
+`leakcheck.py` borrows `commitcheck.py`'s GitHub reader rather than growing its own — same token
+resolution, same slug resolution, same error taxonomy — and imports it at the point of use so the
+hooks never pay for it. `commitcheck.py` is byte-identical with the sibling project's copy and must
+stay that way: this reuse deliberately runs one way only.
 
 **Coverage is bounded, and the README says so.** Do not restore any claim that the guard makes
 review unnecessary: it narrows how a leak can happen, and misses generic public hostnames, secrets
@@ -435,8 +481,9 @@ Three workflows, split by where the work is cheap:
 - **`.github/workflows/ci.yml`** — the heavy matrix (leak scan, lint, `pytest` on 3.9 through 3.12,
   the generated-skill check) on the maintainer's self-hosted runner. Triggers: push to `main`, a
   nightly `schedule`, and `workflow_dispatch`. Never pull requests.
-- **`.github/workflows/hygiene.yml`** — the leak scan alone, on `ubuntu-latest`, on `pull_request`.
-  Exactly one GitHub-hosted check per PR, and it takes seconds.
+- **`.github/workflows/hygiene.yml`** — the leak scan alone, on `ubuntu-latest`, on `pull_request`
+  (including `edited`). Scans the tracked tree *and* the pull request's own title and body. Exactly
+  one GitHub-hosted check per PR, and it takes seconds.
 - **`.github/workflows/release.yml`** — GitHub-hosted, and to stay that way: OIDC trusted publishing
   needs `id-token: write` on a GitHub-hosted runner.
 
@@ -559,7 +606,8 @@ A change that makes one of those fail is a regression in the guard, not a discov
   to the one cheap job". It is not coverage for its own sake: it checks the pull request body, which
   exists *only* on a pull request, never passes under a hook, and can replace the merged commit
   message outright. Its trigger list carries `edited` for the same reason. Still one job, still
-  seconds.
+  seconds. The leak scan of the same two fields rides the same trigger, for the same reason from the
+  other direction — see "There are three surfaces" above.
 
 The claim that used to sit here — "`hygiene.yml` was deliberately left alone; the release audit
 already covers what a PR-time check would" — was false, and cost the sibling project its second
