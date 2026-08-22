@@ -430,10 +430,26 @@ A change that makes one of those fail is a regression in the guard, not a discov
   cannot see a message typed into GitHub's squash-merge box.
 - `.github/workflows/ci.yml` runs the same audit nightly, so an allowance that has outlived its
   cause surfaces without waiting for a merge, and installs `node` in the `test` job so the
-  agreement between the engines is enforced rather than skipped.
+  agreement between the engines is enforced rather than skipped. Nightly matters more than it looks
+  now that the audit reads pull request bodies: a body edited a week after the merge changes what
+  the next release contains, with nothing else having run in between.
+- `.github/workflows/hygiene.yml` gained a step, which is the one exception to "keep this workflow
+  to the one cheap job". It is not coverage for its own sake: it checks the pull request body, which
+  exists *only* on a pull request, never passes under a hook, and can replace the merged commit
+  message outright. Its trigger list carries `edited` for the same reason. Still one job, still
+  seconds.
 
-`hygiene.yml` was deliberately left alone: it is the one cheap PR check by design, and the release
-audit already covers what a PR-time check would.
+The claim that used to sit here — "`hygiene.yml` was deliberately left alone; the release audit
+already covers what a PR-time check would" — was false, and cost the sibling project its second
+release in a row. The release audit runs *after* the merge. Nothing looked at the body before it.
+
+**The audit's verdict is only as wide as its reach, and it has to say when it is narrower.**
+`resolve_bodies` has three modes and no fourth: `require` (the workflows) fails without a token
+rather than checking a different artefact and calling it green, `auto` (a developer's checkout)
+consults GitHub when it can and prints `NOT consulted` in the output when it cannot, and `skip` is
+git only, on purpose, which is what the unit tests pass so they never reach the network. There is
+deliberately no silent fallback: silent fallback to the wrong string is precisely the state the
+first version of this guard shipped in.
 
 **The audit reads `--first-parent`, because that is what release-please reads.** It asks GitHub for
 the *merge commits on the branch*, not for everything reachable from it. A plain `git log` would
@@ -450,12 +466,54 @@ parse, which `test_every_commit_in_this_repositorys_history_is_readable` re-chec
 entry is only ever added for a message that has already been lost and whose content has been
 accounted for somewhere the changelog names.
 
-**Two fidelity gaps worth knowing, neither of them closable from a hook.** release-please replaces
-the whole message with a `BEGIN_COMMIT_OVERRIDE` block from the pull request body when there is one,
-which neither the hook nor `git log` can see; and one commit may carry several conventional commits,
-split on `BEGIN_NESTED_COMMIT` or on a blank line before a new `type:` line. `split_messages`
-transcribes the second so a message that loses only *part* of itself is still refused. The first is
-one more reason the allowance table exists.
+**The message is not always the message, and that is what the first version of this guard got
+wrong.** It diagnosed the grammar rule correctly, shipped three layers built on it, and then passed
+— green, twice, in the sibling project — on a release that considered zero commits. release-please
+does not parse the commit message. It parses `splitMessages(preprocessCommitMessage(commit))`, and
+`preprocessCommitMessage` is four lines:
+
+```js
+const overrideMessage = (commit.pullRequest.body.split('BEGIN_COMMIT_OVERRIDE')[1] || '')
+  .split('END_COMMIT_OVERRIDE')[0]
+  .trim()
+if (overrideMessage) return overrideMessage
+```
+
+`String.split` finds that literal **anywhere in a pull request body**, including in a sentence that
+merely names it. The pull request that shipped the guard had a body explaining this very mechanism,
+so release-please threw the commit message away and parsed the paragraph after the word instead. It
+began `block from the PR body when there is one`; `block` is five characters; the parser stopped on
+the space after it and reported `unexpected token ' ' at 1:6`. Column 6 makes no sense on a
+`fix(ci):` subject, which is the clue that the text being parsed was not the subject at all. The
+commit message parsed perfectly — and a checker that reads commit messages therefore said so.
+
+**Three artefacts reach release-please and only one of them passes under a commit-msg hook.**
+
+| artefact | written | checked by |
+| --- | --- | --- |
+| the commit message | locally, by a developer | `--commit-msg` (the hook) |
+| the merge commit's message | in GitHub's squash box | `--since-release` (after the merge) |
+| the pull request body | in GitHub's editor | `--pull-request` (`hygiene.yml`) |
+
+The body is the dangerous one. It *replaces* the other two, it can be edited after every check has
+run, and nothing in the repository records it — so `--since-release` and `--commit` resolve it from
+the GitHub API rather than trusting `git log`, and `--pull-requests require` (what the workflows
+pass) makes a missing credential a failure. This is also why
+`test_every_commit_in_this_repositorys_history_is_readable` is not the whole claim it looks like: it
+proves every *message* here parses, which is a statement about git, not about what release-please
+read.
+
+**One rule here is stricter than upstream, deliberately.** Upstream is content with an override
+block that is never closed — it simply reads to the end of the body. That is exactly the shape an
+accidental mention takes, so `override_faults` refuses a block that names the marker and never closes
+it. Without that rule an accidental mention whose next paragraph *happened* to parse would silently
+become the changelog entry. An empty block is not refused: upstream's `if (overrideMessage)` is falsy
+on an empty string, so a body ending on the marker loses nothing and crying wolf at it would train
+somebody to stop reading the output.
+
+**The other fidelity note.** One commit may carry several conventional commits, split on
+`BEGIN_NESTED_COMMIT` or on a blank line before a new `type:` line. `split_messages` transcribes that
+so a message that loses only *part* of itself is still refused.
 
 **If a fix ever is dropped here, releasing it.** Landing a parseable commit makes release-please
 re-scan the range, but the unparseable commit is dropped again and never reaches the changelog — so

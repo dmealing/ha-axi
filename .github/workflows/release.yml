@@ -26,6 +26,16 @@ jobs:
   # the healthy no-op and still passes, which is the distinction the log did not
   # make.
   #
+  # `--pull-requests require` is the correction to the first version of this job,
+  # which passed — in the sibling project — while release-please dropped every
+  # commit in the range. The message a commit carries is not necessarily the
+  # message release-please reads: a pull request body that names the
+  # commit-override marker — a paragraph *about* the mechanism is enough —
+  # replaces the whole message with whatever follows the word. That artefact is
+  # on GitHub and not in the checkout, so the audit needs a token, and `require`
+  # makes a missing one fail rather than quietly send it back to checking the
+  # wrong string.
+  #
   # This job deliberately does NOT `needs:` the one below. It has to fail on its
   # own account, including on a run where release-please itself errored, and its
   # verdict does not depend on the outcome it is auditing.
@@ -33,6 +43,11 @@ jobs:
     name: every commit is readable
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # The pull request body can replace the commit message, so the audit has
+      # to read it. Read-only: this job never writes anything.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +65,9 @@ jobs:
       - name: Self-test the checker
         run: python3 scripts/commitcheck.py --demo
       - name: Audit every commit since the last release
-        run: python3 scripts/commitcheck.py --since-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/commitcheck.py --since-release --pull-requests require
 
   # Drives version bumps and the changelog from conventional commits, and opens
   # a release PR. Merging that PR is what cuts a release.

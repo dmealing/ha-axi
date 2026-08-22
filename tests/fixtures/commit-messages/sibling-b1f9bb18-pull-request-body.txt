@@ -1,0 +1,2 @@
+- Two known fidelity gaps are documented rather than papered over: release-please substitutes a BEGIN_COMMIT_OVERRIDE block from the PR body when there is one, which neither a hook nor git log can see; and splitMessages is transcribed so a message that loses only part of itself is still refused.
+- ha-axi: same change applied, committed and pushed as PR #11 (green).

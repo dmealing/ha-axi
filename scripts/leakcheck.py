@@ -205,6 +205,12 @@ PATH_ALLOWANCES = {
     # the pair is the evidence: same prose, same term, and only one of them
     # parses. Same trailer, same reason it cannot carry a marker.
     "tests/fixtures/commit-messages/46c25f9.txt": frozenset({"personal-email"}),
+    # The sibling project's commit whose message was fine and was not the one
+    # release-please read: the body of its pull request replaced it. Kept for the
+    # same reason as the two above, and exempted on the same grounds -- the same
+    # no-reply co-author trailer, and the same requirement that the bytes stay
+    # exactly the commit's.
+    "tests/fixtures/commit-messages/sibling-b1f9bb18.txt": frozenset({"personal-email"}),
 }
 
 
