@@ -1,0 +1,72 @@
+fix(ci): fail a release that silently dropped a commit, and reject the message that causes it (#11)
+
+A merged fix sat on `main` unreleased while the release workflow reported
+success. release-please logged `commit could not be parsed` at debug level,
+counted `Considering: 0 commits`, skipped the release and exited 0. Nothing
+was red, and PyPI stayed a version behind the repository.
+
+**The rule, established against the parser rather than guessed at.**
+release-please 17.3.0 parses with `@conventional-commits/parser` at `^0.4.1`,
+whose grammar offers every physical body line to
+`<footer> ::= <token> <separator> <whitespace>* <value>`. `<token>` is a
+`<type>` with an optional parenthesised scope, and `<type>` consumes from the
+start of the line until whitespace, a newline, `!`, `:`, `(` or `)`. If it
+stops on an opening parenthesis the parser is committed to reading a scope: it
+consumes to the next parenthesis or newline, and if that is not the closing one
+it *throws* — at `lib/parser.js:177`, the only `throw` reachable from the body,
+and the only production that raises rather than returning an error its caller
+can back out of.
+
+So a body line beginning with a backticked call run into a nested parenthesis
+is unparseable, while the identical phrase one word further along the same line
+is fine. It is not parentheses, not backticks, not the dash used as a dash, and
+not position on its own: it is the interaction. Reproduced locally against the
+same parser version the action runs, and bisected over twenty-one shapes.
+
+**Rich commit bodies are not the constraint and are not restricted here.** The
+accepted corpus pins what must keep working — nested parentheses mid-line,
+markdown bullets, footers, breaking-change notes, a full rich body — and one
+test asserts that every ingredient of the failing shape is legitimate alone.
+
+**Three layers.** `.githooks/commit-msg` now runs `scripts/commitcheck.py`
+beside the leak scan and names the line, the column and what to change; that is
+the real fix. `release.yml` gains a `commit-audit` job that re-checks every
+commit since the last release tag and fails when one would be dropped, calling
+out by name the state where zero commits are considered while commits wait —
+it does not depend on the release-please job, so it fails on its own account.
+`ci.yml` runs the same audit nightly.
+
+**Two engines, one answer.** `vendor/conventional-commits-parser/` carries a
+byte-for-byte copy of the four dependency-free upstream modules under ISC, so
+`node` alone runs the real parser with no install and no network; a
+transcription of the same grammar answers where `node` is absent. The suite
+runs the whole corpus through both and compares verdict, line, column and
+token, so the fallback is a stand-in rather than a guess. That comparison
+already earned its keep: it caught the node path failing to match its own error
+string when the offending token was a newline.
+
+Regression fixture is the real message, byte for byte, asserted to be the
+commit that is in this repository and to fail at line 13, column 14 — the exact
+position the workflow reported.
+
+fix(toon): satisfy both TOON spec MUST violations and exact-match leak allowances
+
+This restates work that is already merged and was never published. The commit
+carrying it is the one release-please could not read, so it never reached a
+changelog; the code has been on `main` since, and ships here.
+
+Canonical decimal form is a MUST for zero and for the band the spec reserves,
+which Python's float repr leaves early at both ends, so the encoder formats
+through the shortest round-tripping digits inside that range and defers to
+`json.dumps` outside it. A tabular header on a hyphen line is a keyless
+fields-bearing header, allowed only at the document root, so an inner array
+must take list form however uniform its items are. All 179 official encode
+fixtures are vendored byte-for-byte and run on every `pytest`, with the case
+count and the per-file checksums asserted; 177 of 179 shipped in 0.2.2 because
+nothing was measuring it. No command's output changes.
+
+The leak scanner's per-path allowance is matched exactly and from every entry
+point: a name that merely ends with an allowed one is a different file, and
+`repo_relative` gives one file one name whatever found it.
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>

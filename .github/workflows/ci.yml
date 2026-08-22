@@ -72,6 +72,11 @@ jobs:
     name: commit messages are readable
     runs-on: [self-hosted, linux]
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # A pull request body can replace a commit message entirely, so the audit
+      # reads it. Read-only.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,7 +91,9 @@ jobs:
       - name: Self-test the checker
         run: python3 scripts/commitcheck.py --demo
       - name: Audit every commit since the last release
-        run: python3 scripts/commitcheck.py --since-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/commitcheck.py --since-release --pull-requests require
 
   # EVERY job that needs third-party packages installs into a fresh `.venv` and
   # calls the tools by path out of it. That is not ceremony. This runner runs as
