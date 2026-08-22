@@ -23,6 +23,7 @@ from conftest import (
     ENTITY_REGISTRY,
     SERVICES,
     STATES,
+    capability_masks,
     declared_fields,
     displayed_name,
     extended_entry,
@@ -231,6 +232,51 @@ def test_most_services_and_fields_publish_no_prose():
         if not field.get("description")
     ]
     assert fields_without_prose
+
+
+def test_a_response_capable_service_also_publishes_a_capability_requirement():
+    """The pairing that makes a filtered-out refusal reachable.
+
+    Home Assistant narrows a target's candidates by availability and capability
+    before deciding it matched nothing, and the `return_response` refusal that
+    follows carries nothing to read on the wire. A model where no
+    response-capable service publishes a mask leaves the capability half of
+    that verdict unexercisable against the double, which is how the
+    availability half went unexercised too.
+    """
+    paired = [
+        (entry["domain"], name)
+        for entry in SERVICES
+        for name, description in entry["services"].items()
+        if isinstance(description.get("response"), dict)
+        and capability_masks(description, entry["domain"])
+    ]
+    assert paired, "no response-capable service publishes a capability requirement"
+
+
+def test_a_response_capable_domain_holds_an_unavailable_entity():
+    """The other half of the same pairing, on the entity side.
+
+    The filtering rule drops `unavailable` candidates before the not-matched
+    check, so a response service whose domain holds no such entity can never
+    produce the refusal that rule exists to explain.
+    """
+    response_domains = {
+        entry["domain"]
+        for entry in SERVICES
+        for description in entry["services"].values()
+        if isinstance(description.get("response"), dict)
+    }
+    states = _states_by_id()
+    unavailable = [
+        state["entity_id"]
+        for state in STATES
+        if state["state"] == "unavailable"
+        and state["entity_id"].split(".", 1)[0] in response_domains
+    ]
+    assert unavailable, "no unavailable entity sits in a response-capable domain"
+    for entity_id in unavailable:
+        assert entity_id in states
 
 
 # ---------------------------------------------------- what the doubles answer

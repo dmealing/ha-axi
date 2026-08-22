@@ -170,6 +170,21 @@ STATES = [
         "context": {"id": "01EXAMPLECONTEXT0000000010", "parent_id": None, "user_id": None},
     },
     {
+        # A second calendar the response service *matches* but cannot act on.
+        # Home Assistant drops `unavailable` candidates before it decides a
+        # target matched nothing, so under `return_response` this entity turns
+        # the call into the bodyless 500 -- the one refusal shape whose reason
+        # exists only in the filtering rule -- while an ordinary call skips it
+        # in silence and answers an empty change set.
+        "entity_id": "calendar.example_old_agenda",
+        "state": "unavailable",
+        "attributes": {"friendly_name": "Example Old Agenda"},
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000011", "parent_id": None, "user_id": None},
+    },
+    {
         # `unknown` is not `unavailable`: the entity is reachable and has simply
         # not reported a value yet. A double that never produced one let the
         # home view count the two together under the name of one of them.
@@ -261,6 +276,14 @@ SERVICES = [
                         {"domain": ["media_player"], "supported_features": [FEATURE_NEXT_TRACK]}
                     ]
                 },
+                # A response mode alongside that mask, so the one refusal whose
+                # reason lives only in the filtering rule is reachable in both
+                # of its forms: an `unavailable` candidate and an incapable one
+                # are dropped the same way, and only a `return_response` call
+                # turns the empty result into the bodyless 500. Without one
+                # service publishing both keys, the capability half of that
+                # verdict could never be exercised against the double.
+                "response": {"optional": True},
             },
             "volume_up": {
                 "name": "Turn up volume",
@@ -322,10 +345,26 @@ SERVICES = [
                     }
                 },
                 "target": {"entity": [{"domain": ["calendar"]}]},
-                # Present with `optional: false` means the service answers with
-                # a payload or not at all -- it cannot be called without asking.
+                # Changed to optional:true so the unavailable-entity test can
+                # exercise both sides of the verdict: with --response (bodyless
+                # 500) and without (empty change set with diagnostic).
+                "response": {"optional": True},
+            },
+            "list_events": {
+                "name": "List events",
+                "description": "List events (response-only service for testing).",
+                "fields": {
+                    "start_date_time": {
+                        "required": True,
+                        "description": "The start of the window.",
+                        "selector": {"datetime": None},
+                    }
+                },
+                "target": {"entity": [{"domain": ["calendar"]}]},
+                # Response-required service for testing the error message when
+                # --response is omitted.
                 "response": {"optional": False},
-            }
+            },
         },
     },
 ]
@@ -463,6 +502,13 @@ ENTITY_REGISTRY = [
         original_name="Example Agenda",
         platform="example",
         unique_id="unique-ten",
+    ),
+    _registry_entry(
+        entity_id="calendar.example_old_agenda",
+        id="registry-eleven",
+        original_name="Example Old Agenda",
+        platform="example",
+        unique_id="unique-eleven",
     ),
     # Disabled by its integration, and therefore has no state at all. A registry
     # entry without a state is ordinary -- every installation has some -- and a

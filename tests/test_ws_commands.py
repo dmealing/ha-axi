@@ -17,7 +17,7 @@ from conftest import FAKE_TOKEN
 def test_entity_list_resolves_area_names_in_the_default_view(run_cli, ws_env):
     code, out = run_cli(["entity", "list"], ws_env)
     assert code == 0
-    assert "entities[10]{entity_id,name,area}:" in out
+    assert "entities[11]{entity_id,name,area}:" in out
     assert "light.example_lamp,Example Lamp,Example Room" in out
 
 
@@ -61,7 +61,7 @@ def test_entity_list_filters_by_domain_and_platform_and_search(run_cli, ws_env):
     _, out = run_cli(["entity", "list", "--domain", "sensor"], ws_env)
     assert "sensor.example_temperature" in out and "light.example_lamp" not in out
     _, out = run_cli(["entity", "list", "--platform", "demo"], ws_env)
-    assert "count: 6 of 6 matched (10 total)" in out
+    assert "count: 6 of 6 matched (11 total)" in out
     _, out = run_cli(["entity", "list", "--search", "lamp"], ws_env)
     assert "light.example_lamp" in out and "sensor.example" not in out
 
@@ -445,7 +445,7 @@ def test_writing_to_a_closed_connection_is_a_structured_failure(ws_env, ws_serve
     ws_server.close_after = 1
     ctx = Context(ws_env)
     with ctx.ws() as client:
-        assert len(client.run("entity.list")) == 10
+        assert len(client.run("entity.list")) == 11
         # Give the client's reader time to observe the reset, so the write is
         # the first operation to touch the dead socket.
         time.sleep(0.1)
@@ -571,13 +571,46 @@ def test_entity_list_filters_by_device(run_cli, ws_env):
     assert "binary_sensor.example_doorway" in out
     assert "sensor.example_legacy_meter" in out
     assert "light.example_lamp" not in out
-    assert "count: 2 of 2 matched (10 total)" in out
+    assert "count: 2 of 2 matched (11 total)" in out
 
 
-def test_entity_list_device_says_the_zero_with_the_filter_named(run_cli, ws_env):
+def test_entity_list_rejects_a_device_id_no_device_has(run_cli, ws_env):
+    """A truncated id is a failed lookup, not a filter that matched nothing.
+
+    `--area` on the same command resolves against the live registry and exits
+    1. A device id is opaque, so an agent holding a mistyped one has no other
+    spelling to try, and a zero-row answer used to send it round the filter
+    variations -- the same dead end the flag itself was added to remove.
+    """
     code, out = run_cli(["entity", "list", "--device", "device_nine"], ws_env)
+    assert code == 1
+    assert "no device with id 'device_nine'" in out
+    assert "NO_SUCH_DEVICE" in out
+    assert "Run `ha-axi device list --fields device_id,name` to see each device's id" in out
+
+
+def test_entity_list_keeps_the_zero_for_a_device_that_supplies_nothing(
+    run_cli, ws_env, ws_server
+):
+    """A real device with no entities is an empty result, not a lookup failure.
+
+    `this device has no entities` and `this id is not a device` are different
+    facts, and only the second is an error.
+    """
+    ws_server.devices.append(
+        {
+            "id": "device_five",
+            "name": "Example Stereo",
+            "name_by_user": None,
+            "area_id": None,
+            "manufacturer": "Example Co",
+            "model": "Model S",
+        }
+    )
+    code, out = run_cli(["entity", "list", "--device", "device_five"], ws_env)
     assert code == 0
-    assert "supplied by device device_nine" in out
+    assert "0 registry entries found supplied by device device_five" in out
+    assert "total: 11 entries in the entity registry" in out
 
 
 # ---------------------------------------------- an area_id nothing answers to
@@ -605,10 +638,10 @@ def test_a_stranded_entity_still_counts_somewhere(run_cli, ws_env, ws_server):
     _strand(ws_server, "light.example_lamp")
     code, out = run_cli(["area", "list"], ws_env)
     assert code == 0
-    # 2 + 2 in the two areas and 5 unassigned is the whole registry. Counting
-    # the stranded entity into an area nothing prints made the totals stop
-    # summing, with nothing said about the entity that had gone missing.
-    assert "unassigned_entities: 6" in out
+    # 2 + 2 in the two areas and the rest unassigned is the whole registry.
+    # Counting the stranded entity into an area nothing prints made the totals
+    # stop summing, with nothing said about the entity that had gone missing.
+    assert "unassigned_entities: 7" in out
     assert "example_room,Example Room,2,2," in out
     assert "example_hall,Example Hall,2,1,ground" in out
 

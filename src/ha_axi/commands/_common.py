@@ -218,6 +218,28 @@ def resolve_area(areas: list, needle: str) -> dict:
     )
 
 
+def resolve_device(devices: list, device_id: str) -> dict:
+    """Find a device by its id, which is the only handle it has.
+
+    A device id is opaque, so unlike an area there is no name to fall back on:
+    an id no device answers to is a failed lookup against the live registry --
+    exit 1, the same side of the line `resolve_area` puts a missing area on --
+    and not an empty result, or an agent that truncates one loops on filter
+    variations instead of re-reading the registry that holds the real spelling.
+    """
+    needle = device_id.strip()
+    for device in devices:
+        if device.get("id") == needle:
+            return device
+    raise NotFound(
+        f"no device with id {needle!r}",
+        help_lines=[
+            "Run `ha-axi device list --fields device_id,name` to see each device's id",
+        ],
+        code="NO_SUCH_DEVICE",
+    )
+
+
 def area_is_placed(area_id: str, areas: list) -> bool:
     """Whether an `area_id` names an area that actually exists.
 

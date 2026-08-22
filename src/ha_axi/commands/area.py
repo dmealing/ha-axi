@@ -103,7 +103,7 @@ def _list(ctx, parsed):
     counts, unassigned = _entity_counts(entities, devices, areas)
     device_counts: dict = {}
     for device in devices:
-        if device.get("area_id"):
+        if area_is_placed(device.get("area_id") or "", areas):
             device_counts[device["area_id"]] = device_counts.get(device["area_id"], 0) + 1
 
     rows = [

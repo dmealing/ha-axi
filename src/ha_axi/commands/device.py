@@ -7,6 +7,7 @@ from ..output import HelpBlock
 from ._common import (
     area_name_map,
     count_line,
+    device_name_map,
     filter_by_area,
     matches_search,
     parse_limit,
@@ -59,6 +60,7 @@ def run(ctx, sub: str, parsed):
         entities = client.run("entity.list") or []
 
     area_names = area_name_map(areas)
+    device_names = device_name_map(devices)
     entity_counts: dict = {}
     for entry in entities:
         device_id = entry.get("device_id")
@@ -68,7 +70,7 @@ def run(ctx, sub: str, parsed):
     rows = [
         {
             "device_id": device.get("id", ""),
-            "name": device.get("name_by_user") or device.get("name") or "",
+            "name": device_names.get(device.get("id"), ""),
             "area": area_names.get(device.get("area_id") or "", ""),
             "area_id": device.get("area_id") or "",
             "manufacturer": device.get("manufacturer") or "",

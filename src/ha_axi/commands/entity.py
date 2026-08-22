@@ -25,6 +25,7 @@ from ._common import (
     registry_name,
     reject_conflicting_flags,
     resolve_area,
+    resolve_device,
     select_fields,
 )
 
@@ -159,10 +160,13 @@ def _list(ctx, parsed):
     # route from a device to the entities it supplies: `device list` reports a
     # count, not ids. Without this flag the suggestion `service call` prints
     # when a device target reaches nothing named a command that always answered 0.
+    # The id is resolved against the registry the snapshot already holds, so a
+    # truncated one is a failed lookup rather than a filter that matches nothing.
     device_id = parsed.get("device")
     if device_id:
-        rows = [row for row in rows if row["device_id"] == device_id.strip()]
-        scope.append(f"supplied by device {device_id}")
+        device = resolve_device(devices, device_id)
+        rows = [row for row in rows if row["device_id"] == device.get("id", "")]
+        scope.append(f"supplied by device {device.get('id', '')}")
 
     search = parsed.get("search")
     if search:
