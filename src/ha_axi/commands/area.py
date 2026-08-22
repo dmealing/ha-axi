@@ -6,6 +6,7 @@ from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ..output import HelpBlock
 from ._common import (
+    area_is_placed,
     device_area_map,
     effective_area_id,
     plural,
@@ -66,18 +67,21 @@ def run(ctx, sub: str, parsed):
     return _update(ctx, parsed)
 
 
-def _entity_counts(entities: list, devices: list) -> tuple:
+def _entity_counts(entities: list, devices: list, areas: list) -> tuple:
     """Count entities per area, and how many belong to no area at all.
 
     Both follow the device fallback, so the totals agree with what Home
-    Assistant shows for each area.
+    Assistant shows for each area. An `area_id` no area answers to counts as
+    unassigned rather than as its own bucket nothing prints: counting it
+    anywhere else is what let the per-area counts plus `unassigned_entities`
+    quietly stop summing to the size of the registry.
     """
     device_areas = device_area_map(devices)
     counts: dict = {}
     unassigned = 0
     for entry in entities:
         area_id = effective_area_id(entry, device_areas)
-        if area_id:
+        if area_is_placed(area_id, areas):
             counts[area_id] = counts.get(area_id, 0) + 1
         else:
             unassigned += 1
@@ -96,7 +100,7 @@ def _list(ctx, parsed):
             "help": HelpBlock(["Run `ha-axi area create --name '<name>'` to add one"]),
         }
 
-    counts, unassigned = _entity_counts(entities, devices)
+    counts, unassigned = _entity_counts(entities, devices, areas)
     device_counts: dict = {}
     for device in devices:
         if device.get("area_id"):
@@ -137,7 +141,7 @@ def _get(ctx, parsed):
 
     area = resolve_area(areas, needle)
     area_id = area.get("area_id", "")
-    counts, _ = _entity_counts(entities, devices)
+    counts, _ = _entity_counts(entities, devices, areas)
     return {
         "area": {
             "area_id": area_id,

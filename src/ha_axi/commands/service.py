@@ -592,12 +592,7 @@ def _report_target(live: _Live, doc, domain: str, service: str, parsed) -> None:
     parts = list(resolved.problems)
 
     if not reachable:
-        raise NotFound(
-            f"{scope} matched 0 entities {domain}.{service} can act on, so the call did nothing"
-            + (f" ({'; '.join(parts)})" if parts else ""),
-            help_lines=_target_help(domain, service, parsed),
-            code="NO_ENTITIES_TARGETED",
-        )
+        raise _no_entities_targeted(resolved, domain, service, parsed)
 
     parts.append(f"{scope} matched {plural(len(reachable), 'entity', 'entities')}")
     unavailable = [state for state in reachable if state.get("state") == "unavailable"]
@@ -611,6 +606,25 @@ def _report_target(live: _Live, doc, domain: str, service: str, parsed) -> None:
 
     doc["target"] = "; ".join(parts)
     doc["help"] = HelpBlock(_target_help(domain, service, parsed))
+
+
+def _no_entities_targeted(resolved: _Resolved, domain: str, service: str, parsed):
+    """The one answer to "the target named nothing this service can act on".
+
+    Built here rather than at each site because the two sites are the same
+    question asked on opposite sides of the same outcome -- a 200 with an empty
+    change set, and the 500 the identical call gets when `--response` is set --
+    and an agent that saw them phrased differently would have no way to tell they
+    were the same finding.
+    """
+    parts = list(resolved.problems)
+    scope = _scope_phrase(parsed)
+    return NotFound(
+        f"{scope} matched 0 entities {domain}.{service} can act on, so the call did nothing"
+        + (f" ({'; '.join(parts)})" if parts else ""),
+        help_lines=_target_help(domain, service, parsed),
+        code="NO_ENTITIES_TARGETED",
+    )
 
 
 def _scope_phrase(parsed) -> str:
@@ -636,7 +650,10 @@ def _target_help(domain: str, service: str, parsed) -> list:
         )
         lines.append("Run `ha-axi area list` to see each area's id and how much it holds")
     if devices:
-        lines.append(f"Run `ha-axi entity list --search {devices[0]}` to see a device's entities")
+        # `--device`, not `--search`: a device id is opaque and was never in the
+        # search haystack, so the line this replaces named a command that
+        # answered `0 registry entries found` every single time it was run.
+        lines.append(f"Run `ha-axi entity list --device {devices[0]}` to see a device's entities")
     if not areas and not devices:
         lines.append("Run `ha-axi state get <entity_id>` to see an entity's current state")
     lines.append(f"Run `ha-axi service get {domain}.{service}` to see what this service targets")
@@ -739,7 +756,39 @@ def _explain(live: _Live, exc: AxiError, domain: str, service: str, data: dict, 
                 code="UNSUPPORTED_CAPABILITY",
             )
 
+    # Last, because everything above explains the refusal from what was *sent*,
+    # and this explains it from what was *reached*. A call whose target names
+    # nothing is a 200 with an empty change set -- which `_report_target` answers
+    # -- unless `--response` is set, where `helpers/service.py` raises
+    # `HomeAssistantError("Service call requested response data but did not match
+    # any entities")` and aiohttp renders it as a bare 500 with no body. The
+    # only command that can fail this way is the one whose failure carries
+    # nothing to read, so the diagnosis has to be re-derived here or it is lost.
+    unreached = _unreached_target(live, spec, domain, service, parsed)
+    if unreached is not None:
+        return unreached
+
     return _with_help(exc, _generic_help(domain, service))
+
+
+def _unreached_target(live: _Live, spec, domain: str, service: str, parsed):
+    """`NO_ENTITIES_TARGETED` when the target reached nothing, else None.
+
+    Resolving costs the registries, so it is asked only of a call that named a
+    target and that nothing else could explain. A transport that will not answer
+    is no reason to invent a verdict: the original refusal stands instead.
+    """
+    if not (
+        parsed.get("target_entity") or parsed.get("target_area") or parsed.get("target_device")
+    ):
+        return None
+    try:
+        resolved = live.resolved(parsed)
+    except AxiError:
+        return None
+    if resolved.within(model.target_domains(spec)):
+        return None
+    return _no_entities_targeted(resolved, domain, service, parsed)
 
 
 def _incapable(live: _Live, parsed, masks) -> list:

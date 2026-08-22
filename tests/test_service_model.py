@@ -448,3 +448,107 @@ def test_target_domains_is_empty_when_the_service_publishes_no_restriction():
     assert servicemodel.target_domains({}) == []
     assert servicemodel.target_domains({"target": {"entity": [{}]}}) == []
     assert servicemodel.target_domains({"target": {"entity": [{"domain": "light"}]}}) == ["light"]
+
+
+def test_a_response_call_that_reached_nothing_gets_the_same_answer_as_one_that_did_not(
+    run_cli, installation_env
+):
+    """Regression: `--response` turned a good diagnosis into a bare HTTP 500.
+
+    Reaching no entity is a `200 []` for an ordinary call, which
+    `_report_target` reads and answers. For a `return_response` call Home
+    Assistant raises `HomeAssistantError("Service call requested response data
+    but did not match any entities")` instead, which aiohttp renders as a
+    bodyless 500 -- so the identical situation arrived with nothing to read and
+    fell through to help about *fields*, which were never the problem.
+
+    `example_room` holds no calendar, so both spellings reach nothing, and both
+    have to say so.
+    """
+    argv = [
+        "service",
+        "call",
+        "calendar.get_events",
+        "--target-area",
+        "example_room",
+        "--data",
+        "start_date_time=2026-01-01 00:00:00",
+    ]
+    with_flag_code, with_flag = run_cli([*argv, "--response"], installation_env)
+    assert with_flag_code == 1
+    assert "NO_ENTITIES_TARGETED" in with_flag
+    assert "matched 0 entities calendar.get_events can act on" in with_flag
+    assert "HTTP_500" not in with_flag
+    assert "to see the fields it takes" not in with_flag
+
+
+def test_a_response_call_that_reached_something_is_untouched_by_that_branch(
+    run_cli, installation_env
+):
+    """The other half, and the one that keeps the double honest.
+
+    The refusal is about reach, so a `--response` call that does reach an entity
+    has to come back 200 -- and the double has to be the thing proving it, or a
+    double that answered 500 for *every* response call would satisfy the test
+    above and be wrong in the opposite direction.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--target-entity",
+            "calendar.example_agenda",
+            "--response",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        installation_env,
+    )
+    assert code == 0
+    assert "NO_ENTITIES_TARGETED" not in out
+    assert "calendar.get_events" in out
+
+
+def test_a_named_entity_outside_the_services_domain_is_reported_as_unreached(
+    run_cli, installation_env
+):
+    # A light is not a calendar, so this reaches nothing -- and says which
+    # entity it was, rather than blaming the fields.
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--target-entity",
+            "light.example_lamp",
+            "--response",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        installation_env,
+    )
+    assert code == 1
+    assert "NO_ENTITIES_TARGETED" in out
+
+
+def test_a_device_target_that_reached_nothing_suggests_a_command_that_works(
+    run_cli, installation_env
+):
+    """Regression: the suggestion named a search that could never match.
+
+    A device id was never in `entity list --search`'s haystack, so the line
+    printed here answered `0 registry entries found` every time it was run --
+    and nothing else in the tool went from a device to its entities.
+    """
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--target-device", "device_three"],
+        installation_env,
+    )
+    assert code == 1
+    assert "Run `ha-axi entity list --device device_three` to see a device's entities" in out
+
+    # And that line is runnable, which is the whole claim being made.
+    listed_code, listed = run_cli(["entity", "list", "--device", "device_three"], installation_env)
+    assert listed_code == 0
+    assert "sensor.example_temperature" in listed

@@ -68,16 +68,25 @@ def run(ctx, sub: str, parsed):
         return doc
 
     counts: dict = {}
+    # Counted apart, because they are different facts and `state list --state`
+    # can be run against either. Summing them under one label called
+    # `unavailable` contradicted `state list --state unavailable` outright on any
+    # installation holding an entity that has simply not reported yet -- which is
+    # most of them, and this is the view `setup hooks` puts in front of a session.
     unavailable = 0
+    unknown = 0
     for state in states:
         domain = domain_of(state.get("entity_id", ""))
         counts[domain] = counts.get(domain, 0) + 1
-        if state.get("state") in ("unavailable", "unknown"):
+        if state.get("state") == "unavailable":
             unavailable += 1
+        elif state.get("state") == "unknown":
+            unknown += 1
 
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     doc["entities"] = f"{len(states)} in {len(counts)} domains"
     doc["unavailable"] = unavailable
+    doc["unknown"] = unknown
     if ranked:
         doc["domains"] = [
             {"domain": name, "entities": total} for name, total in ranked[:TOP_DOMAINS]

@@ -11,15 +11,15 @@ from conftest import FAKE_TOKEN
 def test_state_list_defaults_to_three_fields_and_reports_the_total(run_cli, rest_env):
     code, out = run_cli(["state", "list"], rest_env)
     assert code == 0
-    assert "states[6]{entity_id,name,state}:" in out
-    assert "count: 6 of 6 total" in out
+    assert "states[10]{entity_id,name,state}:" in out
+    assert "count: 10 of 10 total" in out
     assert "light.example_lamp,Example Lamp,on" in out
 
 
 def test_state_list_filters_by_domain_and_keeps_the_total_visible(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--domain", "light"], rest_env)
     assert code == 0
-    assert "count: 2 of 2 matched (6 total)" in out
+    assert "count: 2 of 2 matched (10 total)" in out
     assert "sensor.example_temperature" not in out
 
 
@@ -34,20 +34,20 @@ def test_state_list_states_the_zero_explicitly(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--domain", "vacuum"], rest_env)
     assert code == 0
     assert "states: 0 entity states found in domain vacuum" in out
-    assert "total: 6 entities in this installation" in out
+    assert "total: 10 entities in this installation" in out
 
 
 def test_state_list_limit_suggests_how_to_see_the_rest(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--limit", "2"], rest_env)
     assert code == 0
-    assert "count: 2 of 6 total" in out
-    assert "Run `ha-axi state list --limit 6` to see all 6" in out
+    assert "count: 2 of 10 total" in out
+    assert "Run `ha-axi state list --limit 10` to see all 10" in out
 
 
 def test_state_list_honours_requested_fields(run_cli, rest_env):
     code, out = run_cli(["state", "list", "--fields", "entity_id,domain"], rest_env)
     assert code == 0
-    assert "states[6]{entity_id,domain}:" in out
+    assert "states[10]{entity_id,domain}:" in out
 
 
 def test_state_list_rejects_an_unknown_field_and_lists_the_valid_ones(run_cli, rest_env):
@@ -419,3 +419,52 @@ def test_a_tls_failure_is_named_as_one(rest_env):
     assert isinstance(error, ConnectionFailed)
     assert error.code == "TLS_ERROR"
     assert "scheme your instance actually serves" in " ".join(error.help_lines)
+
+
+# ------------------------------------------- what the landing view counts
+
+
+def test_the_home_view_counts_unavailable_and_unknown_apart(run_cli, rest_env):
+    # `unknown` means the entity is reachable and has not reported yet;
+    # `unavailable` means it cannot be reached. Summing them under the name of
+    # one of them made the first thing an agent reads contradict
+    # `state list --state unavailable` on any installation that has either.
+    code, out = run_cli([], rest_env)
+    assert code == 0
+    assert "unavailable: 1" in out
+    assert "unknown: 1" in out
+
+    _, unavailable = run_cli(["state", "list", "--state", "unavailable"], rest_env)
+    assert "switch.example_outlet" in unavailable
+    assert "count: 1 of 1 matched (10 total)" in unavailable
+
+    _, unknown = run_cli(["state", "list", "--state", "unknown"], rest_env)
+    assert "sensor.example_reading" in unknown
+    assert "count: 1 of 1 matched (10 total)" in unknown
+
+
+# ------------------------------------------------ a 404 that says something
+
+
+def test_a_404_that_carries_a_message_reports_the_message(run_cli, rest_env):
+    # The path was fine and the entity was not. Reporting it as a bad path sends
+    # an agent looking for a spelling mistake that is not there.
+    code, out = run_cli(["api", "/states/light.no_such"], rest_env)
+    assert code == 1
+    assert "Entity not found." in out
+    assert "no such API path" not in out
+
+
+def test_a_404_with_no_message_is_still_reported_as_a_bad_path(run_cli, rest_env):
+    # An unrouted path gets aiohttp's own plain-text 404 and no message at all,
+    # so there is nothing to quote and the path really is the thing to fix.
+    code, out = run_cli(["api", "/no_such_path_at_all"], rest_env)
+    assert code == 1
+    assert "no such API path: /no_such_path_at_all" in out
+
+
+def test_template_render_reports_what_the_template_did_wrong(run_cli, rest_env):
+    # A template that does not compile is a 400 with a message, not a render.
+    code, out = run_cli(["template", "render", "--template", "{{ undefined_helper() }}"], rest_env)
+    assert code == 1
+    assert "'undefined_helper' is undefined" in out
