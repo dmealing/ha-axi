@@ -676,8 +676,10 @@ def offline(monkeypatch):
 
 
 def _with_bodies(monkeypatch, bodies):
+    """A reachable repository whose commits carry `bodies`. No network."""
     monkeypatch.setattr(commitcheck, "github_token", lambda: "a token")
     monkeypatch.setattr(commitcheck, "repo_slug", lambda root=".": "owner/name")
+    monkeypatch.setattr(commitcheck, "github_json", lambda path, **kwargs: {"full_name": path})
     monkeypatch.setattr(
         commitcheck,
         "pull_request_body_for_commit",
@@ -726,6 +728,52 @@ def test_skip_is_the_only_way_to_get_the_old_reach_and_it_says_so(tmp_path, caps
         == 0
     )
     assert "not consulted" in capsys.readouterr().out
+
+
+def test_a_commit_github_does_not_have_is_an_answer_and_not_an_outage(
+    tmp_path, capsys, monkeypatch
+):
+    """Unpushed work is the ordinary local state, and has no pull request.
+
+    Failing on it would make the audit unusable on a branch, which is where it
+    is most useful. The commits are still named in the output, because "we did
+    not look" and "there was nothing to look at" must not read the same.
+    """
+    monkeypatch.setattr(commitcheck, "github_token", lambda: "a token")
+    monkeypatch.setattr(commitcheck, "repo_slug", lambda root=".": "owner/name")
+
+    def answer(path, **kwargs):
+        if path == "/repos/owner/name":
+            return {"full_name": "owner/name"}
+        raise commitcheck.GitHubMissing(f"GET {path}: HTTP Error 422")
+
+    monkeypatch.setattr(commitcheck, "github_json", answer)
+    root = _repo(tmp_path, ["fix: a real fix\n\nbody\n"])
+    assert (
+        commitcheck.audit_range("v1.0.0..HEAD", engine="python", root=root, pull_requests="require")
+        == 0
+    )
+    assert "are not on owner/name yet" in capsys.readouterr().out
+
+
+def test_a_credential_that_cannot_reach_the_repository_is_not_an_all_clear(tmp_path, monkeypatch):
+    """The blind spot arrived at from the other direction.
+
+    A token without access answers 404 for every commit. Read naively, that is
+    "no pull request anywhere" -- which is exactly the wrong string being
+    checked again, with nothing said. So the repository is reached once first,
+    and a failure there is an outage.
+    """
+    monkeypatch.setattr(commitcheck, "github_token", lambda: "a token")
+    monkeypatch.setattr(commitcheck, "repo_slug", lambda root=".": "owner/name")
+
+    def answer(path, **kwargs):
+        raise commitcheck.GitHubMissing(f"GET {path}: HTTP Error 404")
+
+    monkeypatch.setattr(commitcheck, "github_json", answer)
+    root = _repo(tmp_path, ["fix: a real fix\n\nbody\n"])
+    with pytest.raises(commitcheck.GitHubUnavailable):
+        commitcheck.audit_range("v1.0.0..HEAD", engine="python", root=root, pull_requests="require")
 
 
 def test_the_command_line_reports_a_missing_credential_rather_than_passing(tmp_path):

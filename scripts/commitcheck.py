@@ -1020,7 +1020,19 @@ def commits_since(rev_range, root="."):
 
 
 class GitHubUnavailable(Exception):
-    """No credential, no network, or no such object. Never a verdict."""
+    """No credential, or no network. Never a verdict."""
+
+
+class GitHubMissing(GitHubUnavailable):
+    """GitHub does not have this object. That *is* a verdict, once qualified.
+
+    A commit GitHub cannot resolve -- one that has not been pushed yet -- has no
+    pull request, and therefore nothing that could replace its message. Treating
+    that as an outage would fail every local run with unpushed work; treating a
+    404 as "no pull request" without qualification would turn a bad credential
+    into a silent all-clear. So ``resolve_bodies`` proves the repository itself
+    is reachable first, and only then reads a per-commit miss as an answer.
+    """
 
 
 def github_token():
@@ -1072,6 +1084,12 @@ def github_json(path, *, token, api_url=None):
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # 422 is what the commit endpoints answer for a SHA GitHub does not have,
+        # which is an ordinary state locally and never one on a pushed branch.
+        if exc.code in (404, 422):
+            raise GitHubMissing(f"GET {path}: {exc}") from exc
+        raise GitHubUnavailable(f"GET {path}: {exc}") from exc
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise GitHubUnavailable(f"GET {path}: {exc}") from exc
 
@@ -1126,10 +1144,28 @@ def resolve_bodies(commits, *, mode, root=".", slug=None, stream=None):
             "  request body, so this run checked git's copy and not necessarily the text",
             "  release-please will read. Export GITHUB_TOKEN for the whole answer.",
         ]
+    # Reach the repository once before reading anything into a per-commit miss.
+    # Without this, a bad credential would answer 404 for every commit and the
+    # audit would report "no pull request" for all of them -- which is exactly
+    # the blind spot it exists to close, arrived at from the other direction.
+    try:
+        github_json(f"/repos/{slug}", token=token)
+    except GitHubUnavailable as exc:
+        if mode == "require":
+            raise
+        return {}, [
+            f"pull request bodies: NOT consulted ({exc}).",
+            "  This run checked git's copy of the messages and not necessarily the text",
+            "  release-please will read.",
+        ]
     bodies = {}
+    unknown = []
     for sha, _ in commits:
         try:
             bodies[sha] = pull_request_body_for_commit(sha, slug=slug, token=token)
+        except GitHubMissing:
+            # Not pushed. release-please cannot see it either, in this form.
+            unknown.append(sha)
         except GitHubUnavailable:
             if mode == "require":
                 raise
@@ -1141,7 +1177,13 @@ def resolve_bodies(commits, *, mode, root=".", slug=None, stream=None):
     note = f"pull request bodies: consulted for {len(bodies)} commit(s) via {slug}"
     if overridden:
         note += f"; {overridden} carry a commit-override block"
-    return bodies, [note]
+    notes = [note]
+    if unknown:
+        notes.append(
+            f"  {len(unknown)} commit(s) are not on {slug} yet, so they have no pull request "
+            "to read: " + ", ".join(sha[:12] for sha in unknown)
+        )
+    return bodies, notes
 
 
 def audit_range(rev_range, *, engine, root=".", stream=None, pull_requests="auto", slug=None):
