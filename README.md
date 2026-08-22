@@ -275,7 +275,8 @@ scripts/install-hooks.sh   # points core.hooksPath at .githooks
 - **`.githooks/commit-msg`** scans the message, which is a separate channel from file content and
   just as public.
 - **CI** runs `--demo` first — proving the scanner still detects what it claims — and then scans
-  the whole tree. Bypassing the local hooks only delays the failure.
+  the whole tree. The demo's own output is published too, so it reports findings without the
+  values. Bypassing the local hooks only delays the failure.
 - **The pull request itself**, on every open, push *and edit*. A title and a body are published the
   moment they are written, are in no checkout and pass under no hook, so nothing above reaches them
   — and tooling routinely pastes captured output into a body, where a `pytest` header carries a

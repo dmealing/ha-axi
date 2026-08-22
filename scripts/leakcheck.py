@@ -814,14 +814,23 @@ def clean_pull_request():
 
 
 def run_demo():
-    """Prove the scanner fails on dirty content without committing any."""
+    """Prove the scanner fails on dirty content without committing any.
+
+    The findings are reported without their values, because this output is
+    published: it runs in a public CI log as the first step of the pull request
+    check, and the pipeline pastes it into bodies as evidence. The samples are
+    leak-shaped by construction -- that is the proof -- so printing them makes
+    the demo's own output fail the scan it precedes, which is exactly what the
+    pull request that introduced that check did to itself. The exit code and
+    the per-rule lines carry the demonstration; the values are the leak.
+    """
     fixture = dirty_fixture()
     with tempfile.TemporaryDirectory() as directory:
         for name, content in fixture.items():
             (Path(directory) / name).write_text(content, encoding="utf-8")
         findings = scan_paths(sorted(fixture), root=directory)
     triggered = sorted({finding.rule.name for finding in findings})
-    report(findings, scanned=len(fixture), label="synthetic dirty fixture")
+    report(findings, scanned=len(fixture), label="synthetic dirty fixture", show_excerpt=False)
     missing = [rule.name for rule in RULES if rule.name not in triggered]
     if missing:
         print(f"error: the demo fixture did not trigger {', '.join(missing)}")
@@ -876,16 +885,26 @@ def list_rules():
     return 0
 
 
-def report(findings, *, scanned, label="tracked files"):
+def report(findings, *, scanned, label="tracked files", show_excerpt=True):
+    """Print what was found, and where.
+
+    ``show_excerpt=False`` keeps the location and the rule but not the value.
+    A hook reading a private checkout wants the excerpt; the self-test does
+    not, because its output is published -- a public CI log, and pull request
+    bodies it gets pasted into as evidence -- and what it demonstrates with is
+    leak-shaped by construction. The pull request reporter made the same
+    move first, for the same reason.
+    """
     if not findings:
         print(f"leakcheck: 0 findings in {scanned} {label}")
         return
-    print(f"leakcheck[{len(findings)}]{{file,line,rule,pass,excerpt}}:")
+    columns = "file,line,rule,pass,excerpt" if show_excerpt else "file,line,rule,pass"
+    print(f"leakcheck[{len(findings)}]{{{columns}}}:")
     for finding in findings:
-        print(
-            f"  {finding.path},{finding.line_number},{finding.rule.name},"
-            f"{finding.pass_name},{finding.excerpt!r}"
-        )
+        line = f"  {finding.path},{finding.line_number},{finding.rule.name},{finding.pass_name}"
+        if show_excerpt:
+            line += f",{finding.excerpt!r}"
+        print(line)
     print("rules:")
     for name in sorted({finding.rule.name for finding in findings}):
         print(f"  {name}: {RULES_BY_NAME[name].message}")

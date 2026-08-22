@@ -61,6 +61,13 @@ problem; the reach was**, which is why `--pull-request` reuses `RULES` and `scan
 rather than growing a second pattern list. A rule added later covers all three surfaces with nobody
 remembering to wire it up.
 
+**Captured tool output was the leak source twice over, and the second one was the scanner's own
+self-test.** `--demo` prints what each rule caught to prove the rules fire — and those samples are
+leak-shaped by construction, so pasting the demo's output into a body as evidence fails the very
+check it opens, which is what happened to the pull request that introduced that check. The demo
+therefore reports every finding without the value, the way the pull request reporter already did,
+and `tests/test_leakcheck.py` pins that the demo's output passes the pull request scan.
+
 Three things about that scan are load-bearing:
 
 - **`edited` in `hygiene.yml`'s trigger list is the whole mechanism.** The document step writes the

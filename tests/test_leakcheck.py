@@ -614,6 +614,19 @@ def test_the_demo_fixtures_are_the_shapes_they_claim():
     assert leakcheck.scan_pull_request(leakcheck.clean_pull_request()) == []
 
 
+def test_the_self_test_output_passes_the_pull_request_scan(capsys):
+    """The demo's output is published twice over: it runs in a public CI log as
+    the first step of this check, and the pipeline pastes it into pull request
+    bodies as evidence. Printing the sample values to prove the rules fire made
+    that output leak-shaped by construction -- and the pasted evidence then
+    failed `--pull-request` on this repository's own pull request, the guard
+    catching its own self-test. The proof is the exit code and the per-rule
+    lines; the values are the leak."""
+    assert leakcheck.run_demo() == 0
+    out = capsys.readouterr().out
+    assert leakcheck.scan_pull_request((("title", "self-test evidence"), ("body", out))) == []
+
+
 def test_an_empty_pull_request_argument_is_a_refusal_not_a_files_scan(monkeypatch, capsys):
     """A wrapper passing an empty variable is asking about no pull request.
     Falling through to the tracked-file scan would exit green having never
