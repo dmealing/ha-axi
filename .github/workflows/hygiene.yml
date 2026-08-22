@@ -13,11 +13,12 @@
 # quality signal here. Keep this workflow to the one cheap job; adding the
 # matrix back would restore the duplicate-run waste it was split up to end.
 #
-# The last two steps here are the one exception to that, and they are not
-# coverage for their own sake: they check something that exists ONLY on a pull
-# request. A title and a body are in no checkout, pass under no hook, and can be
-# edited after every other check has run — so `edited` is in the trigger list,
-# and two separate guards depend on it being there.
+# The two steps that read the pull request itself are the one exception to
+# that, and they are not coverage for their own sake: they check something
+# that exists ONLY on a pull request. A title and a body are in no checkout,
+# pass under no hook, and can be edited after every other check has run — so
+# `edited` is in the trigger list, and two separate guards depend on it
+# being there.
 #
 # The first is a leak scan of the title and body. This repository is public and
 # the pipeline's own document step writes into the body, pasting captured pytest
