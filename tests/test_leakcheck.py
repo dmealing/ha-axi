@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -463,7 +465,7 @@ def _transport(monkeypatch, **kwargs):
 def test_the_pull_request_body_that_shipped_today_is_caught():
     """A pytest `rootdir:` header inside an evidence block, which is how the
     pipeline's own document step publishes an absolute path."""
-    findings = leakcheck.scan_pull_request("fix(ci): a subject", LEAKY_BODY)
+    findings = leakcheck.scan_pull_request((("title", "fix(ci): a subject"), ("body", LEAKY_BODY)))
     assert rule_names(findings) == ["home-path"]
     (finding,) = findings
     assert finding.path == "pull request body"
@@ -474,21 +476,23 @@ def test_the_pull_request_body_that_shipped_today_is_caught():
 def test_a_leak_in_the_title_is_caught_too():
     """The title is published in every listing, every notification and every
     merge subject; it is as public as the body and is scanned as one."""
-    findings = leakcheck.scan_pull_request(LEAKY_TITLE, "## Intent\n\nordinary prose.\n")
+    findings = leakcheck.scan_pull_request(
+        (("title", LEAKY_TITLE), ("body", "## Intent\n\nordinary prose.\n"))
+    )
     assert rule_names(findings) == ["home-path"]
     assert findings[0].path == "pull request title"
 
 
 def test_every_field_github_publishes_is_scanned():
     """Both fields, in one call, so a leak in either fails the check."""
-    findings = leakcheck.scan_pull_request(LEAKY_TITLE, LEAKY_BODY)
+    findings = leakcheck.scan_pull_request((("title", LEAKY_TITLE), ("body", LEAKY_BODY)))
     assert sorted(f.path for f in findings) == [
         f"pull request {field}" for field in sorted(leakcheck.PULL_REQUEST_FIELDS)
     ]
 
 
 def test_an_ordinary_pull_request_is_left_alone():
-    assert leakcheck.scan_pull_request(CLEAN_TITLE, CLEAN_BODY) == []
+    assert leakcheck.scan_pull_request((("title", CLEAN_TITLE), ("body", CLEAN_BODY))) == []
 
 
 def test_the_check_that_already_read_this_body_reports_it_clean():
@@ -508,7 +512,9 @@ def test_the_check_that_already_read_this_body_reports_it_clean():
         "fix(ci): a subject", 12, LEAKY_BODY, engine="python"
     )
     assert (problems, faults) == ([], [])
-    assert leakcheck.scan_pull_request("fix(ci): a subject", LEAKY_BODY) != []
+    assert (
+        leakcheck.scan_pull_request((("title", "fix(ci): a subject"), ("body", LEAKY_BODY))) != []
+    )
 
 
 def test_a_pull_request_cannot_exempt_itself_with_a_marker():
@@ -516,7 +522,9 @@ def test_a_pull_request_cannot_exempt_itself_with_a_marker():
     in a body is an off-switch anyone can add after every check has run, on the
     one artefact whose editability is why this surface needs a guard."""
     marked = f"rootdir: {HOME}/checkout  {leakcheck.ALLOW_PREFIX}home-path\n"
-    assert rule_names(leakcheck.scan_pull_request("t", marked)) == ["home-path"]
+    assert rule_names(leakcheck.scan_pull_request((("title", "t"), ("body", marked)))) == [
+        "home-path"
+    ]
     # The same line in a file still exempts itself, so this is a policy about the
     # surface and not a change to the marker.
     assert leakcheck.scan_text("f.txt", marked) == []
@@ -526,9 +534,11 @@ def test_an_attribution_trailer_does_not_fail_a_pull_request():
     """GitHub's squash box offers the body as the commit message, so a trailer
     is as routine there as in one -- and is exempt from the address rule only."""
     trailer = "Co-authored-by: Someone <" + "someone" + "@" + "realcompany.co.uk" + ">\n"
-    assert leakcheck.scan_pull_request("fix: x", trailer) == []
+    assert leakcheck.scan_pull_request((("title", "fix: x"), ("body", trailer))) == []
     smuggled = "Co-authored-by: host " + "192." + "168.1.10" + "\n"
-    assert rule_names(leakcheck.scan_pull_request("fix: x", smuggled)) == ["private-ip"]
+    assert rule_names(leakcheck.scan_pull_request((("title", "fix: x"), ("body", smuggled)))) == [
+        "private-ip"
+    ]
 
 
 def test_the_report_says_where_without_republishing_it(monkeypatch, capsys):
@@ -594,14 +604,63 @@ def test_the_self_test_covers_the_pull_request_surface(monkeypatch, capsys):
     the pull request must fail there rather than reporting nothing to report."""
     assert leakcheck.run_demo() == 0
     assert "pull request" in capsys.readouterr().out
-    monkeypatch.setattr(leakcheck, "scan_pull_request", lambda title, body: [])
+    monkeypatch.setattr(leakcheck, "scan_pull_request", lambda fields: [])
     assert leakcheck.run_demo() == 1
     assert "missed a field" in capsys.readouterr().out
 
 
 def test_the_demo_fixtures_are_the_shapes_they_claim():
-    assert rule_names(leakcheck.scan_pull_request(*leakcheck.dirty_pull_request())) == ["home-path"]
-    assert leakcheck.scan_pull_request(*leakcheck.clean_pull_request()) == []
+    assert rule_names(leakcheck.scan_pull_request(leakcheck.dirty_pull_request())) == ["home-path"]
+    assert leakcheck.scan_pull_request(leakcheck.clean_pull_request()) == []
+
+
+def test_an_empty_pull_request_argument_is_a_refusal_not_a_files_scan(monkeypatch, capsys):
+    """A wrapper passing an empty variable is asking about no pull request.
+    Falling through to the tracked-file scan would exit green having never
+    fetched the artefact -- the false assurance this check exists to end."""
+    _transport(monkeypatch, data=[])
+    assert leakcheck.main(["--pull-request", ""]) == 1
+    out = capsys.readouterr().out
+    assert "cannot read the pull request" in out
+    assert "tracked files" not in out
+
+
+def test_an_offset_is_not_printed_when_it_would_not_locate_the_match(monkeypatch, capsys):
+    """The offset must index the artefact as written or not be printed at all.
+
+    A leak that surfaces only in the percent-decoded view of a line, or in the
+    condensed pass, has no offset into anything the reader can open. Printing
+    one anyway sends the one person who can fix it to a position where nothing
+    is -- and the pass column still says which view caught it.
+    """
+    encoded = "cfg=" + urllib.parse.quote(HOME + "/checkout", safe="")
+    _transport(monkeypatch, data={"title": "fix(ci): cfg", "body": encoded + "\n"})
+    assert leakcheck.main(["--pull-request", "7"]) == 1
+    out = capsys.readouterr().out
+    assert "body,1,-,home-path,decoded" in out
+    assert HOME not in out
+
+    split = f"t: {HEAD}.\n{PAYLOAD}.{SIGNATURE}\n"
+    _transport(monkeypatch, data={"title": "fix: x", "body": split})
+    assert leakcheck.main(["--pull-request", "7"]) == 1
+    out = capsys.readouterr().out
+    assert "body,1,-,jwt,joined" in out
+    assert TOKEN not in out and HEAD not in out
+
+
+class _NoGitTransport(_Transport):
+    def repo_slug(self, root="."):
+        raise FileNotFoundError("No such file or directory: 'git'")
+
+
+def test_a_transport_that_cannot_resolve_the_repository_refuses(monkeypatch, capsys):
+    """`repo_slug` shells out to git with no guard of its own, so a machine
+    without one must get the structured refusal, not a raw traceback."""
+    monkeypatch.setattr(leakcheck, "_github_transport", lambda: _NoGitTransport())
+    assert leakcheck.main(["--pull-request", "7"]) == 1
+    out = capsys.readouterr().out
+    assert "cannot read the pull request" in out
+    assert "could not resolve a token or repository" in out
 
 
 def test_the_hygiene_workflow_runs_this_where_it_can_block():
@@ -611,8 +670,27 @@ def test_the_hygiene_workflow_runs_this_where_it_can_block():
     into the body *after* the pull request is opened, so a check that fired only
     on `opened` and `synchronize` would pass the empty original body and never
     see what replaced it.
+
+    The workflow is parsed into what GitHub will actually run, not matched as
+    text: a commented-out step line or prose that mentions a flag is invisible
+    here, and a reformat of the trigger list is not a change of behaviour.
     """
-    workflow = (REPO_ROOT / ".github" / "workflows" / "hygiene.yml").read_text(encoding="utf-8")
-    assert "types: [opened, synchronize, reopened, edited]" in workflow
-    assert "leakcheck.py --pull-request" in workflow
-    assert "pull-requests: read" in workflow
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "hygiene.yml").read_text(encoding="utf-8")
+    )
+    trigger = workflow.get("on") or workflow.get(True) or {}
+    types = (trigger.get("pull_request") or {}).get("types") or []
+    if isinstance(types, str):
+        types = [types]
+    assert "edited" in types
+
+    scanning = []
+    for job in (workflow.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            words = (step.get("run") or "").split()
+            if any(word.endswith("leakcheck.py") for word in words) and "--pull-request" in words:
+                assert "github.event.pull_request.number" in words
+                grants = job["permissions"] if "permissions" in job else workflow.get("permissions")
+                assert (grants or {}).get("pull-requests") == "read"
+                scanning.append(step)
+    assert scanning, "no step runs the pull request scan"

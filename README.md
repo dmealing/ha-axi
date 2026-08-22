@@ -280,8 +280,9 @@ scripts/install-hooks.sh   # points core.hooksPath at .githooks
   moment they are written, are in no checkout and pass under no hook, so nothing above reaches them
   — and tooling routinely pastes captured output into a body, where a `pytest` header carries a
   `rootdir:` line holding an absolute path. It fails the check when it cannot read the pull request
-  rather than reporting a clean it cannot support, and it reports the field, line and offset of a
-  match without printing the match: a CI log is more public than the page it came from. For the same
+  rather than reporting a clean it cannot support, and it reports the field, line and rule of a
+  match — plus the offset when the finding's pass read the text as written — without printing the
+  match: a CI log is more public than the page it came from. For the same
   reason a pull request cannot carry an `allow=` marker — in a file that marker is committed and
   reviewed, and in a body it is an off-switch anyone can add after every check has run.
 

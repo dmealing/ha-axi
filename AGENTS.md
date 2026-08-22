@@ -71,11 +71,14 @@ Three things about that scan are load-bearing:
   an answer that is not a pull request, or an empty `RULES` — every one of them fails the check
   rather than reporting a clean it cannot support. `0 findings` from a guard that never saw the
   artefact converts an unknown risk into a false assurance, which is worse than not running.
-- **The report names the field, line, offset and rule, and never the match.** A pull request check
+- **The report names the field, line, rule and offset, and never the match.** A pull request check
   runs on a public log; printing the excerpt the file report prints would republish the leak to a
-  wider audience than the pull request page. For the same reason a pull request cannot carry a
-  `leakcheck: allow=` marker — in a file that marker is committed, diffed and reviewed, and in a
-  body it is an off-switch anyone can add after every check has run. An attribution trailer is still
+  wider audience than the pull request page. The offset is printed only when the finding's pass read
+  the text as written — one surfaced in a percent-decoded or joined view indexes a string that
+  exists nowhere the reader can open, so it prints `-` and the pass column instead. For the same
+  reason a pull request cannot carry a `leakcheck: allow=` marker — in a file that marker is
+  committed, diffed and reviewed, and in a body it is an off-switch anyone can add after every
+  check has run. An attribution trailer is still
   exempt from the address rule alone, because GitHub's squash box offers the body as the commit
   message.
 

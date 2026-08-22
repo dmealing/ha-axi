@@ -296,11 +296,14 @@ class Finding:
         self.excerpt = excerpt
         self.matched = matched
         self.pass_name = pass_name
-        #: 1-based offset into the view named by ``pass_name`` -- the line for a
-        #: line finding, the condensed whole-file text for a joined one. Carried
-        #: so a finding can be located without the excerpt being printed, which
-        #: is what the pull request report needs: a public CI log must say where
-        #: the match is without republishing it.
+        #: 1-based offset into the line, when the pass that found it read the
+        #: line as written. A finding from a transformed view -- the
+        #: percent-decoded variant, or the condensed pass -- carries none: no
+        #: offset into those views points at anything the reader can open, and a
+        #: number printed as though it did would send somebody to a position
+        #: where nothing is. Carried so a finding can be located without the
+        #: excerpt being printed, which is what the pull request report needs:
+        #: a public CI log must say where the match is without republishing it.
         self.column = column
 
     @property
@@ -369,7 +372,7 @@ def scan_text(path, text, *, markers=True, trailers=False):
 
     for number, line in enumerate(text.splitlines(), start=1):
         exempt = line_exemptions(line, markers=markers, trailers=trailers) | by_path
-        for variant in _decoded_variants(line):
+        for viewed, variant in enumerate(_decoded_variants(line)):
             for rule in RULES:
                 if rule.name in exempt:
                     continue
@@ -380,7 +383,8 @@ def scan_text(path, text, *, markers=True, trailers=False):
                         rule,
                         _excerpt(variant, match),
                         match.group(0),
-                        column=match.start() + 1,
+                        pass_name="line" if viewed == 0 else "decoded",
+                        column=match.start() + 1 if viewed == 0 else None,
                     )
                     if finding.key not in seen:
                         seen.add(finding.key)
@@ -426,7 +430,6 @@ def _scan_condensed(path, text, seen, by_path, *, markers=True, trailers=False):
                     _excerpt(variant, match),
                     match.group(0),
                     pass_name="joined",
-                    column=match.start() + 1,
                 )
                 if finding.key not in seen:
                     seen.add(finding.key)
@@ -573,8 +576,8 @@ def scan_commit_message(path):
 #
 # The rules are the ones above, unchanged and unforked. What is different is the
 # reporting: a public CI log must say WHERE the match is without repeating it,
-# so `report_pull_request` prints the field, the line, the offset and the rule
-# and never the excerpt.
+# so `report_pull_request` prints the field, the line, the offset when it
+# locates the match, and the rule -- never the excerpt.
 # ---------------------------------------------------------------------------
 
 #: The fields GitHub publishes on a pull request page, in the order they appear.
@@ -585,8 +588,12 @@ class PullRequestUnavailable(Exception):
     """The title and body could not be read, so no verdict can be supported."""
 
 
-def scan_pull_request(title, body):
-    """Findings in a pull request's title and body, under the same rules.
+def scan_pull_request(fields):
+    """Findings in a pull request's published fields, under the same rules.
+
+    ``fields`` is one ``(name, text)`` pair per entry of ``PULL_REQUEST_FIELDS``,
+    built once by the reader and shared with the report, so which fields a pull
+    request has is written down in one place.
 
     ``markers=False`` because a pull request cannot carry a credible escape
     hatch; ``trailers=True`` because GitHub's squash box offers the body as the
@@ -594,7 +601,7 @@ def scan_pull_request(title, body):
     ``line_exemptions``.
     """
     findings = []
-    for field, text in zip(PULL_REQUEST_FIELDS, (title, body)):
+    for field, text in fields:
         findings.extend(
             scan_text(f"pull request {field}", text or "", markers=False, trailers=True)
         )
@@ -624,16 +631,24 @@ def _github_transport():
 
 
 def fetch_pull_request(number, *, slug=None, root="."):
-    """``(slug, title, body)`` for one pull request, or ``PullRequestUnavailable``.
+    """``(slug, fields)`` for one pull request, or ``PullRequestUnavailable``.
 
-    Every failure is that exception. There is deliberately no path on which this
-    returns empty text: a guard that cannot read the artefact must fail the check,
-    because reporting "0 findings" for something it never saw is worse than not
-    running -- it converts an unknown into an assurance.
+    ``fields`` is one ``(name, text)`` pair per entry of ``PULL_REQUEST_FIELDS``.
+    Every failure -- including a failure to resolve the token or the repository,
+    which shells out to ``git`` with no guard of its own -- is that exception.
+    There is deliberately no path on which this returns empty text: a guard that
+    cannot read the artefact must fail the check, because reporting "0 findings"
+    for something it never saw is worse than not running -- it converts an
+    unknown into an assurance.
     """
     github = _github_transport()
-    token = github.github_token()
-    slug = slug or github.repo_slug(root)
+    try:
+        token = github.github_token()
+        slug = slug or github.repo_slug(root)
+    except Exception as exc:
+        raise PullRequestUnavailable(
+            f"could not resolve a token or repository for pull request {number} ({exc})"
+        ) from exc
     if not token:
         raise PullRequestUnavailable(
             "no GitHub token (set GITHUB_TOKEN or GH_TOKEN, or authenticate gh)"
@@ -646,18 +661,21 @@ def fetch_pull_request(number, *, slug=None, root="."):
         raise PullRequestUnavailable(f"{slug}#{number} could not be read ({exc})") from exc
     if not isinstance(data, dict):
         raise PullRequestUnavailable(f"{slug}#{number} answered with no pull request")
-    return slug, data.get("title") or "", data.get("body") or ""
+    return slug, tuple((name, data.get(name) or "") for name in PULL_REQUEST_FIELDS)
 
 
 def report_pull_request(findings, *, label, fields, stream=None):
     """Say what was found and where, without republishing any of it.
 
     A pull request check runs on a public log, so the excerpt the file report
-    prints is exactly what must not appear here. The field, the line, the offset
-    and the rule locate the match for the one person who can already see the
-    text, and tell nobody else anything they did not have.
+    prints is exactly what must not appear here. The field, the line and the
+    rule locate the match for the one person who can already see the text, and
+    tell nobody else anything they did not have. The offset joins them only
+    when the pass read the text as written: a finding from a decoded or joined
+    view indexes a string that exists nowhere the reader can open.
     """
     stream = sys.stdout if stream is None else stream
+    field_names = {f"pull request {name}": name for name, _ in fields}
     sizes = ", ".join(f"{field} {len(text)} chars" for field, text in fields)
     print(f"leakcheck: {label} ({sizes})", file=stream)
     if not findings:
@@ -665,7 +683,7 @@ def report_pull_request(findings, *, label, fields, stream=None):
         return
     print(f"leakcheck[{len(findings)}]{{field,line,offset,rule,pass}}:", file=stream)
     for finding in findings:
-        field = finding.path.replace("pull request ", "")
+        field = field_names.get(finding.path, finding.path)
         offset = finding.column if finding.column is not None else "-"
         print(
             f"  {field},{finding.line_number},{offset},{finding.rule.name},{finding.pass_name}",
@@ -676,9 +694,17 @@ def report_pull_request(findings, *, label, fields, stream=None):
         print(f"  {name}: {RULES_BY_NAME[name].message}", file=stream)
     print("help:", file=stream)
     print("  The matched text is deliberately NOT printed here: this log is public.", file=stream)
-    print("  Open the pull request, go to the line and offset above, and replace the", file=stream)
-    print("  value with a synthetic one. Captured tool output is the usual source --", file=stream)
-    print("  a pytest header carries a `rootdir:` line holding an absolute path.", file=stream)
+    print(
+        "  Open the pull request, go to the line above, and replace the value with a", file=stream
+    )
+    print(
+        "  synthetic one. An offset of `-` means the match was found in a decoded or", file=stream
+    )
+    print(
+        "  joined view of the text, so only the line locates it. Captured tool output", file=stream
+    )
+    print("  is the usual source -- a pytest header carries a `rootdir:` line holding", file=stream)
+    print("  an absolute path.", file=stream)
     print("  Editing the body re-runs this check; nothing else has to happen.", file=stream)
     print(
         f"  A line in a pull request cannot carry `{ALLOW_PREFIX}<rule>`, on purpose.", file=stream
@@ -692,7 +718,7 @@ def check_pull_request(number, *, slug=None, root=".", stream=None):
         print("leakcheck: no rules loaded; refusing to report a pull request clean", file=stream)
         return 1
     try:
-        slug, title, body = fetch_pull_request(number, slug=slug, root=root)
+        slug, fields = fetch_pull_request(number, slug=slug, root=root)
     except PullRequestUnavailable as exc:
         print(
             f"leakcheck: cannot read the pull request ({exc}).\n"
@@ -702,13 +728,8 @@ def check_pull_request(number, *, slug=None, root=".", stream=None):
             file=stream,
         )
         return 1
-    findings = scan_pull_request(title, body)
-    report_pull_request(
-        findings,
-        label=f"{slug}#{number}",
-        fields=(("title", title), ("body", body)),
-        stream=stream,
-    )
+    findings = scan_pull_request(fields)
+    report_pull_request(findings, label=f"{slug}#{number}", fields=fields, stream=stream)
     return 1 if findings else 0
 
 
@@ -756,36 +777,40 @@ def dirty_pull_request():
     A pipeline step pastes captured pytest output into the body; a pytest header
     carries a ``rootdir:`` line holding an absolute path. Assembled here rather
     than written out so this file stays clean under its own scan, the same way
-    ``dirty_fixture`` is.
+    ``dirty_fixture`` is. One ``(field, text)`` pair per published field.
     """
     home = "/ho" + "me/" + "someone"
-    title = "fix(ci): run the suite from " + home + "/checkout"
-    body = (
-        "## Evidence\n\n"
-        "<details>\n<summary>pytest</summary>\n\n"
-        "```\n"
-        "platform linux -- Python 3.12.0, pytest-8.0.0, pluggy-1.5.0\n"
-        f"rootdir: {home}/checkout\n"
-        "collected 590 items\n"
-        "```\n\n</details>\n"
+    return (
+        ("title", "fix(ci): run the suite from " + home + "/checkout"),
+        (
+            "body",
+            "## Evidence\n\n"
+            "<details>\n<summary>pytest</summary>\n\n"
+            "```\n"
+            "platform linux -- Python 3.12.0, pytest-8.0.0, pluggy-1.5.0\n"
+            f"rootdir: {home}/checkout\n"
+            "collected 590 items\n"
+            "```\n\n</details>\n",
+        ),
     )
-    return title, body
 
 
 def clean_pull_request():
     """An ordinary pull request. A guard that fires on this gets switched off."""
-    title = "fix(toon): keep decimal form inside the canonical range"
-    body = (
-        "## Intent\n\n"
-        "`src/ha_axi/toon.py` formats through `Decimal(repr(value))` inside the range.\n\n"
-        "```\n"
-        "rootdir: /github/workspace\n"
-        "collected 590 items\n"
-        "```\n\n"
-        "Verified against https://homeassistant.example.com with `light.example_lamp`.\n\n"
-        "Co-authored-by: Someone <someone@example.org>\n"
+    return (
+        ("title", "fix(toon): keep decimal form inside the canonical range"),
+        (
+            "body",
+            "## Intent\n\n"
+            "`src/ha_axi/toon.py` formats through `Decimal(repr(value))` inside the range.\n\n"
+            "```\n"
+            "rootdir: /github/workspace\n"
+            "collected 590 items\n"
+            "```\n\n"
+            "Verified against https://homeassistant.example.com with `light.example_lamp`.\n\n"
+            "Co-authored-by: Someone <someone@example.org>\n",
+        ),
     )
-    return title, body
 
 
 def run_demo():
@@ -807,7 +832,7 @@ def run_demo():
         return 1
     # The pull request surface, proven the same way: a scanner that reaches a
     # file but not a pull request reads as a scanner with nothing to report.
-    leaky = scan_pull_request(*dirty_pull_request())
+    leaky = scan_pull_request(dirty_pull_request())
     fields = sorted({finding.path for finding in leaky})
     if len(fields) != len(PULL_REQUEST_FIELDS):
         print(
@@ -817,7 +842,7 @@ def run_demo():
     if any(finding.column is None for finding in leaky):
         print("error: a pull request finding carried no offset to locate it by")
         return 1
-    quiet = scan_pull_request(*clean_pull_request())
+    quiet = scan_pull_request(clean_pull_request())
     if quiet:
         print(
             "error: the pull request scan fired on an ordinary pull request: "
@@ -869,6 +894,7 @@ def report(findings, *, scanned, label="tracked files"):
     print("  https://homeassistant.example.com, or read it from the environment instead.")
     print(f"  A line that must keep one shape can carry `{ALLOW_PREFIX}<rule>`.")
     print("  A `joined` finding was assembled across lines; the line shown is where it starts.")
+    print("  A `decoded` finding matched a percent-decoded view of the line shown.")
 
 
 def main(argv=None):
@@ -896,7 +922,7 @@ def main(argv=None):
         return list_rules()
     if args.demo:
         return run_demo()
-    if args.pull_request:
+    if args.pull_request is not None:
         return check_pull_request(args.pull_request, slug=args.repo, root=args.root)
     if args.commit_msg:
         findings = scan_commit_message(args.commit_msg)
