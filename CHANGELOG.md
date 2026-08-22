@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/dmealing/ha-axi/compare/v0.3.1...v0.3.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **ci:** check the artefact release-please actually reads, not the one git has ([#13](https://github.com/dmealing/ha-axi/issues/13)) ([40767d9](https://github.com/dmealing/ha-axi/commit/40767d982c5bfa1732326a179efde28499e7ba83))
+* **ci:** fail a release that silently dropped a commit, and reject the message that causes it ([#11](https://github.com/dmealing/ha-axi/issues/11)) ([e9a8ef5](https://github.com/dmealing/ha-axi/commit/e9a8ef5e9d0fbaf5b178fa9fdd119bd5c11b110f))
+
 ## [0.3.1](https://github.com/dmealing/ha-axi/compare/v0.3.0...v0.3.1) (2026-08-21)
 
 
