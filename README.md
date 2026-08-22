@@ -72,6 +72,7 @@ description: Agent ergonomic wrapper around the Home Assistant REST and WebSocke
 url: https://homeassistant.example.com
 entities: 128 in 14 domains
 unavailable: 3
+unknown: 9
 domains[8]{domain,entities}:
   sensor,42
   light,18
@@ -152,6 +153,12 @@ They are different views of the same installation and both are needed:
 An entity with no area of its own **inherits its device's area**; `ha-axi entity get` and
 `entity update` both report which of the two the area came from, and `entity list` resolves
 `area_id` to the area's name in the default output so no second call is needed.
+
+An entity's **name is composed from two registries the same way Home Assistant composes it**: a name
+somebody set wins outright, and otherwise the device's name and the entity's own half are joined —
+so most core entities are named entirely or partly by their device, and `--search` matches the name
+that composition produces. `original_name` remains available as a field for the entity's half alone,
+and `entity list --device <device_id>` lists what one device supplies.
 
 `--area` works the same on `state list`, `entity list` and `device list`. On `state list` it costs
 one extra registry round-trip, because areas exist only over WebSocket — paid only when the flag is
@@ -330,6 +337,13 @@ parts of it that are known: the REST double rejects a nested service-call `targe
 Assistant does, refuses an unknown service with the same empty `400` and no body, and drops an
 `unavailable` or incapable entity in the same silence. So they verify this client against the
 specification rather than against a particular server build.
+
+What the doubles do *not* get to invent is the shape of ordinary data. Their fixtures carry the
+distribution a real installation has — entries named entirely by their device, entries that name
+only their own half, a `has_entity_name` of each setting, a disabled entry with no state at all, an
+`unknown` state as well as an `unavailable` one, services and fields that publish no prose — and
+`tests/test_double_fidelity.py` asserts each of those shapes is still present. Every one of them was
+absent once, and each absence cost a defect that a green suite could not see.
 
 ## Continuous integration
 

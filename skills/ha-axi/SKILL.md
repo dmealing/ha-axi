@@ -89,11 +89,13 @@ Read and update the entity registry over the WebSocket API.
 ha-axi entity list --area 'Example Room'
 ha-axi entity list --domain light --fields entity_id,name,area,platform
 ha-axi entity list --area none --limit 500
+ha-axi entity list --device <device_id>
 ha-axi entity get light.example_lamp
 ha-axi entity update light.example_lamp --name 'Reading Lamp' --area example_room
 ```
 
 - an entity's area is inherited from its device until it is set here explicitly
+- name is the name Home Assistant displays: its device's, plus original_name, unless one is set here
 - entity_ids are not stable identity: filter by --area or --search, not by guessing ids
 
 ### `ha-axi area`

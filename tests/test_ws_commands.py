@@ -17,11 +17,14 @@ from conftest import FAKE_TOKEN
 def test_entity_list_resolves_area_names_in_the_default_view(run_cli, ws_env):
     code, out = run_cli(["entity", "list"], ws_env)
     assert code == 0
-    assert "entities[5]{entity_id,name,area}:" in out
+    assert "entities[11]{entity_id,name,area}:" in out
     assert "light.example_lamp,Example Lamp,Example Room" in out
 
 
-def test_entity_list_falls_back_to_the_original_name(run_cli, ws_env):
+def test_entity_list_reports_a_name_for_an_entry_that_carries_none(run_cli, ws_env):
+    # There is no `original_name` to fall back to here, which is the ordinary
+    # case: the name is the device's, and reading the entity row alone leaves
+    # this column empty on most of a real registry.
     _, out = run_cli(["entity", "list"], ws_env)
     assert "light.example_ceiling,Example Ceiling," in out
 
@@ -58,7 +61,7 @@ def test_entity_list_filters_by_domain_and_platform_and_search(run_cli, ws_env):
     _, out = run_cli(["entity", "list", "--domain", "sensor"], ws_env)
     assert "sensor.example_temperature" in out and "light.example_lamp" not in out
     _, out = run_cli(["entity", "list", "--platform", "demo"], ws_env)
-    assert "count: 3 of 3 matched (5 total)" in out
+    assert "count: 6 of 6 matched (11 total)" in out
     _, out = run_cli(["entity", "list", "--search", "lamp"], ws_env)
     assert "light.example_lamp" in out and "sensor.example" not in out
 
@@ -276,7 +279,7 @@ def test_area_list_counts_entities_including_device_inheritance(run_cli, ws_env)
     assert code == 0
     assert "areas[2]{area_id,name,entities,devices,floor_id}:" in out
     assert "example_hall,Example Hall,2,1,ground" in out
-    assert "example_room,Example Room,1,1," in out
+    assert "example_room,Example Room,3,2," in out
 
 
 def test_area_get_accepts_a_name_as_well_as_an_id(run_cli, ws_env):
@@ -329,14 +332,14 @@ def test_area_update_needs_something_to_change(run_cli, ws_env):
 def test_device_list_shows_areas_and_entity_counts(run_cli, ws_env):
     code, out = run_cli(["device", "list"], ws_env)
     assert code == 0
-    assert "devices[2]{device_id,name,area}:" in out
-    assert "device_two,Renamed Device,Example Hall" in out
+    assert "devices[4]{device_id,name,area}:" in out
+    assert "device_two,Example Ceiling,Example Hall" in out
 
 
 def test_device_list_works_without_the_subcommand_name(run_cli, ws_env):
     code, out = run_cli(["device"], ws_env)
     assert code == 0
-    assert "devices[2]" in out
+    assert "devices[4]" in out
 
 
 def test_ws_list_needs_no_connection(run_cli):
@@ -442,7 +445,7 @@ def test_writing_to_a_closed_connection_is_a_structured_failure(ws_env, ws_serve
     ws_server.close_after = 1
     ctx = Context(ws_env)
     with ctx.ws() as client:
-        assert len(client.run("entity.list")) == 5
+        assert len(client.run("entity.list")) == 11
         # Give the client's reader time to observe the reset, so the write is
         # the first operation to touch the dead socket.
         time.sleep(0.1)
@@ -455,20 +458,12 @@ def test_device_list_filters_by_area(run_cli, ws_env):
     code, out = run_cli(["device", "list", "--area", "Example Room"], ws_env)
     assert code == 0
     assert "device_one" in out and "device_two" not in out
-    assert "count: 1 of 1 matched (2 total)" in out
+    assert "count: 2 of 2 matched (4 total)" in out
 
 
-def test_device_list_finds_devices_with_no_area(run_cli, ws_env, ws_server):
-    ws_server.devices.append(
-        {
-            "id": "device_three",
-            "name": "Example Device Three",
-            "name_by_user": None,
-            "area_id": None,
-            "manufacturer": "Example Co",
-            "model": "Model Z",
-        }
-    )
+def test_device_list_finds_devices_with_no_area(run_cli, ws_env):
+    # device_three is in no area, which is why the entities it supplies are in
+    # none either -- the fixture set carries the case rather than inventing it.
     code, out = run_cli(["device", "list", "--area", "none"], ws_env)
     assert code == 0
     assert "device_three" in out and "device_one" not in out
@@ -486,10 +481,194 @@ def test_device_list_states_the_zero_explicitly(run_cli, ws_env):
     code, out = run_cli(["device", "list", "--search", "nothing-matches"], ws_env)
     assert code == 0
     assert "0 devices found" in out
-    assert "2 devices in the device registry" in out
+    assert "4 devices in the device registry" in out
 
 
 def test_device_list_rejects_an_unknown_area(run_cli, ws_env):
     code, out = run_cli(["device", "list", "--area", "Nowhere"], ws_env)
     assert code == 1
     assert "no area with id or name" in out
+
+
+# ------------------------------- the name Home Assistant actually displays
+
+
+def test_an_entry_that_names_nothing_takes_its_whole_name_from_its_device(run_cli, ws_env):
+    # light.example_ceiling has no `name` and no `original_name`: everything it
+    # is called comes from device_two. Reading the entity row by itself renders
+    # it blank, which is what four registry entries in five looked like.
+    _, out = run_cli(["entity", "list", "--domain", "light"], ws_env)
+    assert "light.example_ceiling,Example Ceiling,Example Hall" in out
+
+
+def test_an_entry_that_names_its_own_half_keeps_the_device_prefix(run_cli, ws_env):
+    # sensor.example_temperature is `Temperature` on its own row and
+    # `Example Hub Temperature` everywhere Home Assistant shows it.
+    _, out = run_cli(["entity", "list", "--fields", "entity_id,name,original_name"], ws_env)
+    assert "sensor.example_temperature,Example Hub Temperature,Temperature" in out
+
+
+def test_a_name_somebody_set_wins_outright_over_the_device_prefix(run_cli, ws_env):
+    # `use_legacy_naming=True` means a user override is the whole name: Home
+    # Assistant does not compose `Example Lamp Fitting` in front of it.
+    _, out = run_cli(["entity", "list", "--domain", "light"], ws_env)
+    assert "light.example_lamp,Example Lamp,Example Room" in out
+    assert "Example Lamp Fitting Lamp" not in out
+
+
+def test_composition_is_not_gated_on_has_entity_name(run_cli, ws_env):
+    # sensor.example_legacy_meter sets `has_entity_name` false and still shows
+    # the device prefix, because the flag decides only whether Home Assistant
+    # stripped that prefix out of `original_name` before publishing it -- which
+    # it does on the way out, so both kinds of entry compose the same way here.
+    _, out = run_cli(["entity", "list", "--domain", "sensor"], ws_env)
+    assert "sensor.example_legacy_meter,Example Doorway Legacy Meter,Example Room" in out
+
+
+def test_search_finds_an_entity_by_the_name_a_user_actually_sees(run_cli, ws_env):
+    # The headline. `Example Doorway` is what Home Assistant displays and what
+    # an agent has to go on, and it lives in the *device* registry: matching
+    # only the entity row answered `0 registry entries found` for it.
+    code, out = run_cli(["entity", "list", "--search", "Example Doorway"], ws_env)
+    assert code == 0
+    assert "binary_sensor.example_doorway" in out
+    assert "0 registry entries found" not in out
+
+
+def test_search_still_matches_the_entity_half_of_a_composed_name(run_cli, ws_env):
+    _, out = run_cli(["entity", "list", "--search", "Legacy Meter"], ws_env)
+    assert "sensor.example_legacy_meter" in out
+
+
+def test_entity_get_reports_the_displayed_name(run_cli, ws_env):
+    code, out = run_cli(["entity", "get", "binary_sensor.example_doorway"], ws_env)
+    assert code == 0
+    assert "name: Example Doorway" in out
+    assert "area_source: device" in out
+
+
+def test_entity_update_reports_the_displayed_name_it_leaves_behind(run_cli, ws_env):
+    # Setting an icon changes no name, so what comes back has to be the composed
+    # one -- the same answer `entity get` gives, from the same row builder.
+    code, out = run_cli(
+        ["entity", "update", "binary_sensor.example_doorway", "--icon", "mdi:door"], ws_env
+    )
+    assert code == 0
+    assert "name: Example Doorway" in out
+
+    # And clearing an override falls back to the composed name, not to blank.
+    code, out = run_cli(["entity", "update", "light.example_lamp", "--clear-name"], ws_env)
+    assert code == 0
+    assert "name: Example Lamp Fitting Lamp" in out
+
+
+# ------------------------------------------- reaching a device's entities
+
+
+def test_entity_list_filters_by_device(run_cli, ws_env):
+    code, out = run_cli(["entity", "list", "--device", "device_four"], ws_env)
+    assert code == 0
+    assert "binary_sensor.example_doorway" in out
+    assert "sensor.example_legacy_meter" in out
+    assert "light.example_lamp" not in out
+    assert "count: 2 of 2 matched (11 total)" in out
+
+
+def test_entity_list_rejects_a_device_id_no_device_has(run_cli, ws_env):
+    """A truncated id is a failed lookup, not a filter that matched nothing.
+
+    `--area` on the same command resolves against the live registry and exits
+    1. A device id is opaque, so an agent holding a mistyped one has no other
+    spelling to try, and a zero-row answer used to send it round the filter
+    variations -- the same dead end the flag itself was added to remove.
+    """
+    code, out = run_cli(["entity", "list", "--device", "device_nine"], ws_env)
+    assert code == 1
+    assert "no device with id 'device_nine'" in out
+    assert "NO_SUCH_DEVICE" in out
+    assert "Run `ha-axi device list --fields device_id,name` to see each device's id" in out
+
+
+def test_entity_list_keeps_the_zero_for_a_device_that_supplies_nothing(run_cli, ws_env, ws_server):
+    """A real device with no entities is an empty result, not a lookup failure.
+
+    `this device has no entities` and `this id is not a device` are different
+    facts, and only the second is an error.
+    """
+    ws_server.devices.append(
+        {
+            "id": "device_five",
+            "name": "Example Stereo",
+            "name_by_user": None,
+            "area_id": None,
+            "manufacturer": "Example Co",
+            "model": "Model S",
+        }
+    )
+    code, out = run_cli(["entity", "list", "--device", "device_five"], ws_env)
+    assert code == 0
+    assert "0 registry entries found supplied by device device_five" in out
+    assert "total: 11 entries in the entity registry" in out
+
+
+# ---------------------------------------------- an area_id nothing answers to
+
+
+def _strand(ws_server, entity_id: str) -> None:
+    """Point one entry at an area that does not exist, as a typo would."""
+    for entry in ws_server.entities:
+        if entry["entity_id"] == entity_id:
+            entry["area_id"] = "no_such_area"
+
+
+def test_an_area_id_no_area_claims_leaves_the_entity_unassigned(run_cli, ws_env, ws_server):
+    # Home Assistant accepts `entity.update --param area_id=<typo>` without
+    # complaint, and the entity then belongs to no area anybody can name. It was
+    # missing from `--area <id>` and from `--area none` alike, so there was no
+    # filter in the tool that could find it at all.
+    _strand(ws_server, "light.example_lamp")
+    code, out = run_cli(["entity", "list", "--area", "none", "--domain", "light"], ws_env)
+    assert code == 0
+    assert "light.example_lamp" in out
+
+
+def test_a_stranded_entity_still_counts_somewhere(run_cli, ws_env, ws_server):
+    _strand(ws_server, "light.example_lamp")
+    code, out = run_cli(["area", "list"], ws_env)
+    assert code == 0
+    # 2 + 2 in the two areas and the rest unassigned is the whole registry.
+    # Counting the stranded entity into an area nothing prints made the totals
+    # stop summing, with nothing said about the entity that had gone missing.
+    assert "unassigned_entities: 7" in out
+    assert "example_room,Example Room,2,2," in out
+    assert "example_hall,Example Hall,2,1,ground" in out
+
+
+def test_entity_get_names_a_dangling_area_id_rather_than_implying_a_placement(
+    run_cli, ws_env, ws_server
+):
+    _strand(ws_server, "light.example_lamp")
+    code, out = run_cli(["entity", "get", "light.example_lamp"], ws_env)
+    assert code == 0
+    assert "area_id: no_such_area" in out
+    assert "area_source: no area has this id" in out
+
+
+# --------------------------------------- a registry entry with no state at all
+
+
+def test_a_disabled_entry_is_listed_and_flagged(run_cli, ws_env):
+    code, out = run_cli(
+        ["entity", "list", "--search", "probe", "--fields", "entity_id,name,disabled"], ws_env
+    )
+    assert code == 0
+    assert "sensor.example_disabled_probe,Example Hub Probe,true" in out
+
+
+def test_a_disabled_entry_has_no_state_and_state_list_says_so(run_cli, installation_env):
+    # The registry is the only view a disabled entity appears in: REST never
+    # publishes a state for it. A fixture set where every entry had one never
+    # exercised the difference between the two views the tool exists to bridge.
+    code, out = run_cli(["state", "get", "sensor.example_disabled_probe"], installation_env)
+    assert code == 1
+    assert "no entity with id sensor.example_disabled_probe" in out

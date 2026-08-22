@@ -11,9 +11,11 @@ from ..argspec import Command, Flag, Sub
 from ..errors import NotFound, UsageError
 from ..output import HelpBlock
 from ._common import (
+    area_is_placed,
     area_name_map,
     count_line,
     device_area_map,
+    device_name_map,
     domain_of,
     effective_area_id,
     filter_by_area,
@@ -23,6 +25,7 @@ from ._common import (
     registry_name,
     reject_conflicting_flags,
     resolve_area,
+    resolve_device,
     select_fields,
 )
 
@@ -54,7 +57,12 @@ COMMAND = Command(
                 Flag("--area", "<id|name>", note="'none' selects unassigned entities"),
                 Flag("--domain", "<name>", repeat=True),
                 Flag("--platform", "<name>"),
-                Flag("--search", "<text>", note="matches entity_id and name"),
+                Flag("--device", "<device_id>", note="the entities one device supplies"),
+                Flag(
+                    "--search",
+                    "<text>",
+                    note="matches entity_id, the displayed name and original_name",
+                ),
                 Flag("--limit", "<n>", default=DEFAULT_LIMIT),
                 Flag("--fields", "<a,b,c>", note=f"from {'|'.join(LIST_FIELDS)}"),
             ),
@@ -77,12 +85,15 @@ COMMAND = Command(
     ),
     notes=(
         "an entity's area is inherited from its device until it is set here explicitly",
+        "name is the name Home Assistant displays: its device's, plus original_name, "
+        "unless one is set here",
         "entity_ids are not stable identity: filter by --area or --search, not by guessing ids",
     ),
     examples=(
         "ha-axi entity list --area 'Example Room'",
         "ha-axi entity list --domain light --fields entity_id,name,area,platform",
         "ha-axi entity list --area none --limit 500",
+        "ha-axi entity list --device <device_id>",
         "ha-axi entity get light.example_lamp",
         "ha-axi entity update light.example_lamp --name 'Reading Lamp' --area example_room",
     ),
@@ -104,12 +115,12 @@ def _snapshot(client):
     return entities, areas, devices
 
 
-def _row(entry: dict, area_names: dict, device_areas: dict) -> dict:
+def _row(entry: dict, area_names: dict, device_areas: dict, device_names: dict) -> dict:
     entity_id = entry.get("entity_id", "")
     area_id = effective_area_id(entry, device_areas)
     return {
         "entity_id": entity_id,
-        "name": registry_name(entry),
+        "name": registry_name(entry, device_names),
         "area": area_names.get(area_id, "") if area_id else "",
         "area_id": area_id,
         "platform": entry.get("platform", ""),
@@ -128,7 +139,8 @@ def _list(ctx, parsed):
 
     area_names = area_name_map(areas)
     device_areas = device_area_map(devices)
-    rows = [_row(entry, area_names, device_areas) for entry in entities]
+    device_names = device_name_map(devices)
+    rows = [_row(entry, area_names, device_areas, device_names) for entry in entities]
     total = len(rows)
 
     scope: list = []
@@ -143,6 +155,18 @@ def _list(ctx, parsed):
     if platform:
         rows = [row for row in rows if row["platform"].lower() == platform.strip().lower()]
         scope.append(f"from platform {platform}")
+
+    # A device id is opaque, so there is nothing to search it by and no other
+    # route from a device to the entities it supplies: `device list` reports a
+    # count, not ids. Without this flag the suggestion `service call` prints
+    # when a device target reaches nothing named a command that always answered 0.
+    # The id is resolved against the registry the snapshot already holds, so a
+    # truncated one is a failed lookup rather than a filter that matches nothing.
+    device_id = parsed.get("device")
+    if device_id:
+        device = resolve_device(devices, device_id)
+        rows = [row for row in rows if row["device_id"] == device.get("id", "")]
+        scope.append(f"supplied by device {device.get('id', '')}")
 
     search = parsed.get("search")
     if search:
@@ -201,15 +225,23 @@ def _get(ctx, parsed):
     with ctx.ws() as client:
         entities, areas, devices = _snapshot(client)
     entry = _find(entities, entity_id)
-    row = _row(entry, area_name_map(areas), device_area_map(devices))
+    row = _row(entry, area_name_map(areas), device_area_map(devices), device_name_map(devices))
     row["unique_id"] = entry.get("unique_id") or ""
     row["icon"] = entry.get("icon") or ""
-    row["area_source"] = _area_source(entry, row["area_id"])
+    row["area_source"] = _area_source(entry, row["area_id"], areas)
     return {"entity": row}
 
 
-def _area_source(entry: dict, area_id: str) -> str:
-    """Where an entity's effective area came from: itself, its device, or nowhere."""
+def _area_source(entry: dict, area_id: str, areas: list) -> str:
+    """Where an entity's effective area came from: itself, its device, or nowhere.
+
+    An `area_id` that names no area is called out rather than reported as a
+    placement, because `area` is empty either way and the two are not the same
+    thing: one entity is unassigned, the other is holding an id nothing answers
+    to and is therefore missing from every per-area count.
+    """
+    if area_id and not area_is_placed(area_id, areas):
+        return "no area has this id"
     if entry.get("area_id"):
         return "entity"
     return "device" if area_id else ""
@@ -295,14 +327,14 @@ def _update(ctx, parsed):
     # Reported through the same row builder `entity get` uses, from the
     # resulting registry entry rather than from the request, so the two views
     # cannot disagree about what the entity now is.
-    row = _row(entry, area_name_map(areas), device_area_map(devices))
+    row = _row(entry, area_name_map(areas), device_area_map(devices), device_name_map(devices))
     return {
         "entity": row["entity_id"],
         "updated": updated,
         "name": row["name"],
         "area": row["area"],
         "area_id": row["area_id"],
-        "area_source": _area_source(entry, row["area_id"]),
+        "area_source": _area_source(entry, row["area_id"], areas),
     }
 
 

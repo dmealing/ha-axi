@@ -447,22 +447,16 @@ def _precheck(live: _Live, domain: str, service: str, parsed) -> None:
         # The registries are the only way to know what an area holds. Failing
         # to read them is a reason not to check, never a reason to refuse.
         return
-    candidates = [
-        state
-        for state in resolved.within(model.target_domains(spec))
-        if state.get("state") != "unavailable"
-    ]
-    if not candidates:
+    reached = _reached(resolved, spec, domain)
+    if reached:
         return
-    incapable = [
-        state for state in candidates if not model.satisfies(model.entity_features(state), masks)
-    ]
-    if len(incapable) < len(candidates):
+    available = _available(resolved.within(model.target_domains(spec)))
+    if not available:
         return
 
     reported = ", ".join(
         f"{state.get('entity_id', '')} reports {model.entity_features(state)}"
-        for state in incapable
+        for state in available
     )
     raise ApiError(
         f"{domain}.{service} needs a supported_features bitmask containing any of "
@@ -571,6 +565,35 @@ def _resolve(ctx, parsed) -> _Resolved:
     return _Resolved(resolved, problems)
 
 
+def _available(states: list) -> list:
+    """The matched entities Home Assistant has not already written off.
+
+    An `unavailable` entity is skipped in silence however well it fits the
+    service's target -- even one named outright, which is what separates it
+    from an entity that lacks a capability and is refused over.
+    """
+    return [state for state in states if state.get("state") != "unavailable"]
+
+
+def _reached(resolved: _Resolved, spec, domain: str) -> list:
+    """The matched entities a call would actually act on, not merely match.
+
+    `helpers/service.py` narrows its candidate entities to the available ones
+    and to the ones carrying a capability the service publishes before it
+    decides a target reached anything, so an entity can be matched by domain and
+    still never arrive. The pre-dispatch gate and the re-derived `--response`
+    verdict read a target through this one predicate, or the two halves of one
+    outcome -- the 200 with an empty change set, and the bodyless 500 the same
+    call becomes under `--response` -- would be diagnosed from different facts.
+    """
+    masks = model.feature_masks(spec, domain)
+    return [
+        state
+        for state in _available(resolved.within(model.target_domains(spec)))
+        if not masks or model.satisfies(model.entity_features(state), masks)
+    ]
+
+
 def _report_target(live: _Live, doc, domain: str, service: str, parsed) -> None:
     """Say what the target resolved to, and refuse to call reaching nothing a success."""
     scope = _scope_phrase(parsed)
@@ -592,12 +615,7 @@ def _report_target(live: _Live, doc, domain: str, service: str, parsed) -> None:
     parts = list(resolved.problems)
 
     if not reachable:
-        raise NotFound(
-            f"{scope} matched 0 entities {domain}.{service} can act on, so the call did nothing"
-            + (f" ({'; '.join(parts)})" if parts else ""),
-            help_lines=_target_help(domain, service, parsed),
-            code="NO_ENTITIES_TARGETED",
-        )
+        raise _no_entities_targeted(resolved, domain, service, parsed)
 
     parts.append(f"{scope} matched {plural(len(reachable), 'entity', 'entities')}")
     unavailable = [state for state in reachable if state.get("state") == "unavailable"]
@@ -611,6 +629,30 @@ def _report_target(live: _Live, doc, domain: str, service: str, parsed) -> None:
 
     doc["target"] = "; ".join(parts)
     doc["help"] = HelpBlock(_target_help(domain, service, parsed))
+
+
+def _no_entities_targeted(
+    resolved: _Resolved, domain: str, service: str, parsed, skipped: str = ""
+):
+    """The one answer to "the target named nothing this service can act on".
+
+    Built here rather than at each site because the two sites are the same
+    question asked on opposite sides of the same outcome -- a 200 with an empty
+    change set, and the 500 the identical call gets when `--response` is set --
+    and an agent that saw them phrased differently would have no way to tell they
+    were the same finding. ``skipped`` carries the opening for a target that
+    *did* match entities Home Assistant then filtered out, so the verdict names
+    them as the reason nothing was reached rather than reporting a match that
+    did not happen.
+    """
+    parts = list(resolved.problems)
+    scope = _scope_phrase(parsed)
+    opening = skipped or f"matched 0 entities {domain}.{service} can act on"
+    return NotFound(
+        f"{scope} {opening}, so the call did nothing" + (f" ({'; '.join(parts)})" if parts else ""),
+        help_lines=_target_help(domain, service, parsed),
+        code="NO_ENTITIES_TARGETED",
+    )
 
 
 def _scope_phrase(parsed) -> str:
@@ -636,7 +678,10 @@ def _target_help(domain: str, service: str, parsed) -> list:
         )
         lines.append("Run `ha-axi area list` to see each area's id and how much it holds")
     if devices:
-        lines.append(f"Run `ha-axi entity list --search {devices[0]}` to see a device's entities")
+        # `--device`, not `--search`: a device id is opaque and was never in the
+        # search haystack, so the line this replaces named a command that
+        # answered `0 registry entries found` every single time it was run.
+        lines.append(f"Run `ha-axi entity list --device {devices[0]}` to see a device's entities")
     if not areas and not devices:
         lines.append("Run `ha-axi state get <entity_id>` to see an entity's current state")
     lines.append(f"Run `ha-axi service get {domain}.{service}` to see what this service targets")
@@ -739,7 +784,71 @@ def _explain(live: _Live, exc: AxiError, domain: str, service: str, data: dict, 
                 code="UNSUPPORTED_CAPABILITY",
             )
 
+    # Last, because everything above explains the refusal from what was *sent*,
+    # and this explains it from what was *reached*. A call whose target names
+    # nothing is a 200 with an empty change set -- which `_report_target` answers
+    # -- unless `--response` is set, where `helpers/service.py` raises
+    # `HomeAssistantError("Service call requested response data but did not match
+    # any entities")` and aiohttp renders it as a bare 500 with no body. The
+    # only command that can fail this way is the one whose failure carries
+    # nothing to read, so the diagnosis has to be re-derived here or it is lost.
+    unreached = _unreached_target(live, spec, domain, service, parsed)
+    if unreached is not None:
+        return unreached
+
     return _with_help(exc, _generic_help(domain, service))
+
+
+def _unreached_target(live: _Live, spec, domain: str, service: str, parsed):
+    """`NO_ENTITIES_TARGETED` when the target reached nothing, else None.
+
+    Resolving costs the registries, so it is asked only of a call that named a
+    target and that nothing else could explain. A transport that will not answer
+    is no reason to invent a verdict: the original refusal stands instead.
+    """
+    if not (
+        parsed.get("target_entity") or parsed.get("target_area") or parsed.get("target_device")
+    ):
+        return None
+    try:
+        resolved = live.resolved(parsed)
+    except AxiError:
+        return None
+    if _reached(resolved, spec, domain):
+        return None
+    matched = resolved.within(model.target_domains(spec))
+    if not matched:
+        return _no_entities_targeted(resolved, domain, service, parsed)
+    reasons = " and ".join(_skipped_reasons(matched, model.feature_masks(spec, domain)))
+    skipped = (
+        f"matched {plural(len(matched), 'entity', 'entities')}, but {reasons}, "
+        "which Home Assistant skips before matching"
+    )
+    return _no_entities_targeted(resolved, domain, service, parsed, skipped)
+
+
+def _skipped_reasons(matched: list, masks: list) -> list:
+    """One clause per reason Home Assistant filtered out a matched entity.
+
+    Only two filters stand between a matched entity and the service: it has to
+    be available, and it has to carry the capability when the service publishes
+    one. `--no-check` is what lets an incapable entity stay in the target after
+    the gate, so both reasons reach this verdict, and each is named for the
+    entity it struck.
+    """
+    reasons = []
+    unavailable = [state for state in matched if state.get("state") == "unavailable"]
+    if unavailable:
+        named = ", ".join(state.get("entity_id", "") for state in unavailable)
+        reasons.append(f"{named} {'is' if len(unavailable) == 1 else 'are'} unavailable")
+    wanted = ", ".join(str(mask) for mask in masks)
+    for state in matched:
+        if state.get("state") == "unavailable":
+            continue
+        features = model.entity_features(state)
+        if masks and not model.satisfies(features, masks):
+            reasons.append(f"{state.get('entity_id', '')} reports {features}, not any of {wanted}")
+    return reasons
 
 
 def _incapable(live: _Live, parsed, masks) -> list:
@@ -748,7 +857,8 @@ def _incapable(live: _Live, parsed, masks) -> list:
     Only the entities the caller named outright: those are the ones Home
     Assistant refuses over, and the ones it can be held to. An area- or
     device-resolved entity is skipped in silence instead, which the pre-check
-    covers before the call ever goes out.
+    covers before the call ever goes out. An unavailable one is skipped before
+    its capability is ever read, so it is not blamed for lacking one.
     """
     if not (parsed.get("target_entity") or []):
         return []
@@ -757,7 +867,7 @@ def _incapable(live: _Live, parsed, masks) -> list:
     except AxiError:
         return []
     out = []
-    for state in resolved.states:
+    for state in _available(resolved.states):
         if state.get("entity_id") not in (parsed.get("target_entity") or []):
             continue
         features = model.entity_features(state)

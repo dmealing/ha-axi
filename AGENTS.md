@@ -118,8 +118,35 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   user override is cleared, so `WsClient.send_command` must not filter `None` out of a payload.
   It did once; `--clear-name` silently did nothing. There is a test for this.
 - **`entity_id` is not stable identity.** Filter by area or search; do not infer meaning from an id.
+- **An entity's displayed name comes from two registries, and most entities do not carry their
+  own.** `registry_name` transcribes Home Assistant's `_async_get_full_entity_name` as
+  `async_get_full_entity_name` calls it — `parts=(DEVICE, ENTITY)`, `use_legacy_naming=True` — which
+  is two rules: a `name` somebody set wins **outright**, device prefix and all, and everything else
+  is the device's display name (`name_by_user or name`) joined to `original_name`, whichever of the
+  two is present. There is no third rule, and in particular **`has_entity_name` is not a gate**:
+  Home Assistant applies it on the way out, publishing `original_name_unprefixed` under the
+  `original_name` key in `as_partial_dict` (and therefore in `extended_dict` too), so what arrives
+  over the WebSocket is already the entity's half alone and both settings of the flag compose
+  identically here. That the state's `friendly_name` and this view agree is not a coincidence to be
+  maintained: `Entity.__async_calculate_state` calls the same `async_get_full_entity_name`, so there
+  is one rule and two readers of it. Measured against a live 2026.8.3 instance, reading the entity
+  row alone agreed with the displayed name for **14 of 88** entities; this rule agrees for **88 of
+  88**. Every earlier proposal that gated composition on `has_entity_name` reaches 83 — the five it
+  misses are exactly the entries whose whole name is their device's and whose flag is unset.
+  `matches_search` sees the composed name, which is what makes `entity list --search '<the name a
+  user sees>'` work; it answered `0` for four entities in five in 0.3.2.
 - **An entity with no `area_id` inherits its device's area.** Any per-area count or filter that
   ignores the device fallback will be wrong.
+- **An `area_id` no area answers to is not a placement.** Home Assistant accepts
+  `entity.update --param area_id=<typo>` without complaint, and the entity is then invisible to
+  `--area <id>` (there is no such area) *and* to `--area none` (it has an `area_id`), while
+  `area list`'s per-area counts and `unassigned_entities` quietly stop summing to the size of the
+  registry. `area_is_placed` is the one predicate for this: `filter_by_area`'s `none` branch and
+  `area._entity_counts` both treat an unplaced id as unassigned, so the totals reconcile and the
+  entity is findable, and `entity get`/`entity update` report `area_source: no area has this id`
+  rather than `entity`, because "unassigned" and "holding an id nothing answers to" are different
+  facts. A real area delete does not cause this — Home Assistant clears the id itself — so it takes
+  a typo, through a *declared* command rather than `--raw`.
 - **Every view that reports an entity's area builds it with `_row()`.** `effective_area_id` is
   applied there; its other call sites (`state list --area`'s filter, `area list`'s counts) never
   print a per-entity area. A view that reads `entry["area_id"]` directly reports `""` for an entity
@@ -135,6 +162,13 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   agent that learns `--area` on `entity list` will reach for it on `state list`; a filter is not
   the same as importing registry columns into the runtime view, which is why `area` is still not a
   `state list --fields` choice.
+- **A device id is opaque, so `entity list --device` is the only route from a device to its
+  entities.** It is not searchable (and should not be: substring-matching an opaque hex id is an
+  accident, not a filter), and `device list --fields entities` prints a *count*, not ids. Before the
+  flag existed there was no route at all — and `service call`'s help line for a device target that
+  reached nothing suggested `entity list --search <device_id>`, which answered
+  `0 registry entries found` every time it was run. Suggestions have to be runnable; that one was
+  checkable with no server at all.
 - **Adding a WebSocket command** is one entry in `REGISTRY` in `src/ha_axi/ws.py`. It becomes
   reachable through `ha-axi ws <name>` immediately; a typed subcommand is optional on top.
 - **`--json` is the global output mode.** Command flags carrying JSON payloads are named
@@ -155,7 +189,11 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   renders the status line with no JSON body. An unknown service, an undeclared field and a missing
   required one are therefore indistinguishable on the wire. Everything `service call` says about a
   refusal comes from the model instead, read in `_explain` — which is why that path must never be
-  made to depend on the message text or the status number.
+  made to depend on the message text or the status number. **And the status number is not even
+  always 400:** the two refusals that come from a `HomeAssistantError` rather than a `vol.Invalid` —
+  a named entity lacking a capability, and a `--response` call that matched nothing — arrive as a
+  plain-text `500` with a fixed apology for a body. Three distinct statuses, none of them carrying a
+  reason. A client that switched on either would be right by accident at best.
 - **The one message that must never be printed verbatim.** A response-only service refused without
   `?return_response` comes back with Home Assistant's own wording, naming a query parameter of its
   REST API that an agent driving this CLI cannot set. `_explain` answers that case *before* it
@@ -174,16 +212,37 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   exactly the service's own domain, and nothing if a value did not resolve to an integer.
 - **The capability gate is a pre-check for area and device targets only.** Home Assistant refuses
   an entity *named outright* that lacks the feature, but skips one reached through an area or a
-  device in silence — 200 with an empty list, and nothing said. So the pre-check covers the silent
-  half, and the loud half is enriched on the failure path where it is free. `--no-check` exists
-  because a published requirement is an integration's claim about itself, and a wrong one must not
-  become a wall.
+  device in silence — 200 with an empty list, and nothing said. An `unavailable` entity is skipped
+  just as silently however it was named — its capability is never read — so neither the pre-check
+  nor the failure-path enrichment blames it for lacking one. The pre-check covers the silent half,
+  and the loud half is enriched on the failure path where it is free. `--no-check` exists because
+  a published requirement is an integration's claim about itself, and a wrong one must not become
+  a wall.
 - **An empty change set is two different answers.** Home Assistant returns the states that actually
   changed, so `[]` means both "everything was already as asked" and "nothing was reached at all" —
   and it never says which. `service call` resolves the target when, and only when, the change set
   is empty and a target was given: reaching nothing exits 1, reaching something exits 0 with the
   count. Which domains a service can reach is read from its published `target`, never guessed from
   its name — an integration is free to act on another domain's entities, and several do.
+- **`--response` turns the empty-change-set question into a 500.** The two-worlds answer above is
+  only reachable on the success path, because reaching nothing is a `200 []`. With `return_response`
+  set it is not: `helpers/service.py` raises
+  `HomeAssistantError("Service call requested response data but did not match any entities")` after
+  filtering candidates by availability, device class and feature, and aiohttp renders that as a
+  **bodyless 500** — the one command shape whose failure carries nothing at all to read. So
+  `_explain` re-derives the same verdict from the target, last, after every check that explains the
+  refusal from what was *sent*; `_no_entities_targeted` is shared with `_report_target` so the two
+  sides of one outcome cannot be phrased differently. In 0.3.2 this fell through to `_generic_help`
+  and offered help about *fields*, which were never the problem.
+- **`unavailable` and `unknown` are different facts and the home view counts them apart.** `unknown`
+  means reachable and not yet reporting, which is the common one — a live instance had 12 `unknown`
+  and 0 `unavailable`. Summing them under the name of one of them made the landing view, the one
+  `setup hooks` puts in front of every session, contradict `state list --state unavailable` outright.
+- **A 404 that carries a message is not a wrong path.** aiohttp answers an unrouted path with
+  plain-text `404: Not Found` and no body; a routed path whose *subject* is missing answers in JSON
+  — `/states/<id>` says `Entity not found.`. `rest._http_error` quotes the message when there is one
+  and only says `no such API path` when there is not, because telling an agent the path is wrong
+  sends it looking for a spelling mistake that is not there.
 - **A diagnostic read must not fail a call that worked.** The target report needs the registries,
   which the REST-only path cannot supply. If that read fails, the report says so and the exit code
   stays 0: the call itself was accepted, and turning it into an error would be a fresh untruth.
@@ -229,6 +288,15 @@ recover* has none of those costs and is what `servicemodel.py` is for.
 If none of the five applies, it does not get a command: `service call` already covers it, and
 adding one is two spellings for one operation.
 
+**Open, and deliberately not answered here:** `service get`'s default field list is
+`field,required,type,description`, and `description` is empty on **every row of a real
+installation** — the prose moved into the translation files years ago and `/api/services` does not
+serve them, while `example` (published by more than half of all fields) and the
+`filter.supported_features` marker are not shown by default. The double now publishes a service and
+fields with no prose, so the emptiness is visible in the suite rather than being a surprise. Changing
+the default is a judgement about what an agent most needs to see, not a defect, and it belongs in its
+own change with its own argument.
+
 **Demotion, and the standing cap.** If a typed command's body reduces to flag-mapping plus a
 request, delete it — the measure is the diff, not the intention. Ten nouns fit in a root help block
 an agent reads in one glance; an eleventh has to argue that it earns its line. `--data key=value`
@@ -260,6 +328,26 @@ real loopback servers in `tests/conftest.py`: an `http.server` for REST and a re
 server that performs the Home Assistant `auth_required` / `auth` / `auth_ok` handshake. If a
 behaviour cannot be tested that way, say so in the PR rather than reaching for real credentials.
 
+**Calibrating a fixture against reality is a different job from testing, and it has its own lab.**
+The suite must stay offline; deciding *what shape the data has* cannot be done offline at all, and
+guessing it is what produced every defect below. The recipe is a throwaway container on loopback,
+which mints its own credential and is discarded afterwards — never a real installation:
+
+```sh
+docker run -d --name ha-lab -p 127.0.0.1:<port>:8123 -v "$PWD/haconfig":/config \
+  ghcr.io/home-assistant/home-assistant:stable
+#  POST /api/onboarding/users {client_id,name,username,password,language} -> auth_code
+#  POST /auth/token  grant_type=authorization_code                        -> access_token
+#  WS   auth -> {"type": "auth/long_lived_access_token", "client_name": ..., "lifespan": 30}
+#  POST /api/onboarding/core_config and /analytics; then append `demo:` plus a couple of
+#  template sensors to /config/configuration.yaml *inside* the container and restart.
+```
+
+That yields ~126 states over ~91 registry entries with the real distribution, and the upstream source
+is readable at `/usr/src/homeassistant/homeassistant/` in the same container — which is how the name
+rule above was transcribed rather than guessed. Nothing measured there may be written into this
+repository: the numbers are, the data is not.
+
 **The doubles must answer like Home Assistant, not like the client.** A double that accepts and
 echoes whatever it is sent can only prove the client agrees with itself, which is how the service
 call wire-shape defect and the `entity update` area defect both reached a live installation with a
@@ -284,6 +372,40 @@ green suite. Two rules follow, and neither is optional:
   targeted" two testable worlds rather than one string. `SERVICES`, `capability_masks`,
   `target_domains` and `entities_targeted` in `tests/conftest.py` are that second opinion and are
   deliberately not imported from `ha_axi.servicemodel`.
+- **Not every refusal is a `400`, and two of them carry nothing.** A `HomeAssistantError` is not
+  caught anywhere, so aiohttp renders it as a plain-text `500` with a fixed apology and no message:
+  that is what a named entity lacking a capability gets (`ServiceNotSupported`), and what a
+  `return_response` call that matched no entity gets. The double answers both with `_server_error`.
+  Modelling them as helpful JSON `400`s — which it did — licensed a client to read a status number
+  and a message that never arrive, and made the second case unreachable altogether.
+
+**Make the fixtures less convenient, not more.** The refusals above were modelled with unusual care
+and the *data* was not, and that is where every defect in the 0.3.2 audit came from: a registry where
+every entry named itself, a state that was never `unknown`, a service that documented itself, an
+entity that was never disabled. All four are the majority case upstream, all four were reachable by
+hand, and none of them was visible to 715 passing tests. The fixture set now carries the
+distribution a real installation has — entries named entirely by their device, entries naming only
+their own half, both settings of `has_entity_name`, a disabled entry with **no state at all**, a
+state with no registry entry, an entity with no device, a device in no area, an `unknown` alongside
+an `unavailable`, a service and fields publishing no prose, all 21 keys of `as_partial_dict`, and the
+larger `extended_dict` (with `aliases: [null]`) from `get`/`update` but not from `list`.
+`tests/test_double_fidelity.py` asserts each of those shapes is still present and that every
+registry entry's composed name equals the `friendly_name` on its state, so a fixture edit that
+quietly tidies one away fails where the reason is written down. The bar for a fixture change is that
+**the shipped code before the fix would fail against it**; if the suite still passes against the old
+behaviour, the fixtures have not been corrected.
+
+Two more rules that fall out of that:
+
+- **Every command in `ha_axi.ws.REGISTRY` gets a branch in `_respond`.** Six of the fourteen fell
+  through to `unknown_command` and therefore had no coverage at all, five of them while being
+  declared in `WS_COMMAND_KEYS`. `test_every_websocket_command_the_cli_ships_is_modelled` is
+  parametrised over the registry, so a new command is untestable until the double answers it.
+- **The double's own helpers are transcriptions, not imports.** `displayed_name` and `slugify` in
+  `tests/conftest.py` are written from `helpers/entity_registry`, the same way `capability_masks` is
+  written from `helpers/service`. `displayed_name` is what makes the state/registry agreement an
+  assertion rather than a coincidence; importing `ha_axi.commands._common.registry_name` there would
+  have made the test pass with the bug in place.
 
 Three testing gotchas already paid for:
 

@@ -72,28 +72,36 @@ STATES = [
         "state": "on",
         "attributes": {"friendly_name": "Example Lamp", "brightness": 180},
         "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000001", "parent_id": None, "user_id": None},
     },
     {
         "entity_id": "light.example_ceiling",
         "state": "off",
         "attributes": {"friendly_name": "Example Ceiling"},
         "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000002", "parent_id": None, "user_id": None},
     },
     {
         "entity_id": "sensor.example_temperature",
         "state": "21.5",
-        "attributes": {"friendly_name": "Example Temperature", "unit_of_measurement": "C"},
+        "attributes": {"friendly_name": "Example Hub Temperature", "unit_of_measurement": "C"},
         "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000003", "parent_id": None, "user_id": None},
     },
     {
         "entity_id": "switch.example_outlet",
         "state": "unavailable",
         "attributes": {"friendly_name": "Example Outlet"},
         "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000004", "parent_id": None, "user_id": None},
     },
     {
         "entity_id": "media_player.example_speaker",
@@ -107,7 +115,9 @@ STATES = [
             "supported_features": FEATURE_TURN_ON | FEATURE_VOLUME_SET,
         },
         "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000005", "parent_id": None, "user_id": None},
     },
     {
         "entity_id": "climate.example_thermostat",
@@ -118,7 +128,73 @@ STATES = [
             "temperature": 21,
         },
         "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
         "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000006", "parent_id": None, "user_id": None},
+    },
+    {
+        # The entity whose whole name is its device's. Its registry entry names
+        # nothing at all, and this is the state that says what Home Assistant
+        # displays for it -- the two have to agree, and did not.
+        "entity_id": "binary_sensor.example_doorway",
+        "state": "off",
+        "attributes": {"friendly_name": "Example Doorway", "device_class": "door"},
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000007", "parent_id": None, "user_id": None},
+    },
+    {
+        "entity_id": "sensor.example_legacy_meter",
+        "state": "7",
+        "attributes": {
+            "friendly_name": "Example Doorway Legacy Meter",
+            "unit_of_measurement": "kWh",
+        },
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000008", "parent_id": None, "user_id": None},
+    },
+    {
+        # A calendar, so `calendar.get_events` has something to reach: a
+        # `return_response` call that reaches nothing cannot answer with an empty
+        # change set, and a double with no reachable entity for the only
+        # response service it publishes could only ever exercise the refusal.
+        "entity_id": "calendar.example_agenda",
+        "state": "on",
+        "attributes": {"friendly_name": "Example Agenda"},
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000010", "parent_id": None, "user_id": None},
+    },
+    {
+        # A second calendar the response service *matches* but cannot act on.
+        # Home Assistant drops `unavailable` candidates before it decides a
+        # target matched nothing, so under `return_response` this entity turns
+        # the call into the bodyless 500 -- the one refusal shape whose reason
+        # exists only in the filtering rule -- while an ordinary call skips it
+        # in silence and answers an empty change set.
+        "entity_id": "calendar.example_old_agenda",
+        "state": "unavailable",
+        "attributes": {"friendly_name": "Example Old Agenda"},
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000011", "parent_id": None, "user_id": None},
+    },
+    {
+        # `unknown` is not `unavailable`: the entity is reachable and has simply
+        # not reported a value yet. A double that never produced one let the
+        # home view count the two together under the name of one of them.
+        "entity_id": "sensor.example_reading",
+        "state": "unknown",
+        "attributes": {"friendly_name": "Example Hub Reading", "unit_of_measurement": "A"},
+        "last_changed": "2026-01-01T00:00:00+00:00",
+        "last_reported": "2026-01-01T00:00:00+00:00",
+        "last_updated": "2026-01-01T00:00:00+00:00",
+        "context": {"id": "01EXAMPLECONTEXT0000000009", "parent_id": None, "user_id": None},
     },
 ]
 
@@ -172,12 +248,16 @@ SERVICES = [
         },
     },
     {
+        # The ordinary case on a real installation, and the one the rest of this
+        # table gets wrong: almost no service publishes a `name` or a
+        # `description`, and almost no field publishes one either. They moved to
+        # the translation files, which `/api/services` does not serve. A model
+        # where everything documents itself let `service get` be designed around
+        # a column that is empty on every row of a real instance.
         "domain": "switch",
         "services": {
             "toggle": {
-                "name": "Toggle",
-                "description": "Toggle a switch.",
-                "fields": {},
+                "fields": {"delay": {"selector": {"number": {"min": 0, "max": 60}}}},
                 "target": {"entity": [{"domain": ["switch"]}]},
             }
         },
@@ -196,6 +276,14 @@ SERVICES = [
                         {"domain": ["media_player"], "supported_features": [FEATURE_NEXT_TRACK]}
                     ]
                 },
+                # A response mode alongside that mask, so the one refusal whose
+                # reason lives only in the filtering rule is reachable in both
+                # of its forms: an `unavailable` candidate and an incapable one
+                # are dropped the same way, and only a `return_response` call
+                # turns the empty result into the bodyless 500. Without one
+                # service publishing both keys, the capability half of that
+                # verdict could never be exercised against the double.
+                "response": {"optional": True},
             },
             "volume_up": {
                 "name": "Turn up volume",
@@ -257,80 +345,184 @@ SERVICES = [
                     }
                 },
                 "target": {"entity": [{"domain": ["calendar"]}]},
-                # Present with `optional: false` means the service answers with
-                # a payload or not at all -- it cannot be called without asking.
+                # Changed to optional:true so the unavailable-entity test can
+                # exercise both sides of the verdict: with --response (bodyless
+                # 500) and without (empty change set with diagnostic).
+                "response": {"optional": True},
+            },
+            "list_events": {
+                "name": "List events",
+                "description": "List events (response-only service for testing).",
+                "fields": {
+                    "start_date_time": {
+                        "required": True,
+                        "description": "The start of the window.",
+                        "selector": {"datetime": None},
+                    }
+                },
+                "target": {"entity": [{"domain": ["calendar"]}]},
+                # Response-required service for testing the error message when
+                # --response is omitted.
                 "response": {"optional": False},
-            }
+            },
         },
     },
 ]
 
+
+#: The entity registry, in the shape `config/entity_registry/list` returns.
+#:
+#: The distribution matters as much as the shape. On a real installation most
+#: entries carry `has_entity_name` and name *part* of themselves at most: the
+#: rest of the name comes from the device, and a majority name none of
+#: themselves at all. A fixture set where every entry carried its own
+#: `original_name` and none carried `has_entity_name` described an installation
+#: that does not exist, and let a display name that disagreed with Home
+#: Assistant's for four entities in five ship behind a green suite.
+#:
+#: Every key Home Assistant publishes is present, including the ones nothing
+#: reads: a client that started depending on a missing key would find out here
+#: rather than on somebody's installation.
+def _registry_entry(**overrides) -> dict:
+    """One registry entry with every key `as_partial_dict` publishes."""
+    entry = {
+        "area_id": None,
+        "categories": {},
+        "config_entry_id": "example-config-entry",
+        "config_subentry_id": None,
+        "created_at": 1767225600.0,
+        "device_id": None,
+        "disabled_by": None,
+        "entity_category": None,
+        "entity_id": "",
+        "has_entity_name": False,
+        "hidden_by": None,
+        "icon": None,
+        "id": "",
+        "labels": [],
+        "modified_at": 1767225600.0,
+        "name": None,
+        "options": {},
+        "original_name": None,
+        "platform": "demo",
+        "translation_key": None,
+        "unique_id": "",
+    }
+    entry.update(overrides)
+    return entry
+
+
 ENTITY_REGISTRY = [
-    {
-        "entity_id": "light.example_lamp",
-        "name": "Example Lamp",
-        "original_name": "Lamp",
-        "area_id": "example_room",
-        "device_id": "device_one",
-        "platform": "demo",
-        "unique_id": "unique-one",
-        "icon": None,
-        "disabled_by": None,
-        "hidden_by": None,
-        "entity_category": None,
-    },
-    {
-        "entity_id": "light.example_ceiling",
-        "name": None,
-        "original_name": "Example Ceiling",
-        "area_id": None,
-        "device_id": "device_two",
-        "platform": "demo",
-        "unique_id": "unique-two",
-        "icon": None,
-        "disabled_by": None,
-        "hidden_by": None,
-        "entity_category": None,
-    },
-    {
-        "entity_id": "sensor.example_temperature",
-        "name": None,
-        "original_name": "Example Temperature",
-        "area_id": None,
-        "device_id": None,
-        "platform": "demo",
-        "unique_id": "unique-three",
-        "icon": None,
-        "disabled_by": None,
-        "hidden_by": None,
-        "entity_category": "diagnostic",
-    },
-    {
-        "entity_id": "media_player.example_speaker",
-        "name": None,
-        "original_name": "Example Speaker",
-        "area_id": "example_hall",
-        "device_id": None,
-        "platform": "example",
-        "unique_id": "unique-four",
-        "icon": None,
-        "disabled_by": None,
-        "hidden_by": None,
-        "entity_category": None,
-    },
-    {
-        "entity_id": "climate.example_thermostat",
-        "name": None,
-        "original_name": "Example Thermostat",
-        "area_id": None,
-        "device_id": None,
-        "platform": "example",
-        "unique_id": "unique-five",
-        "icon": None,
-        "disabled_by": None,
-        "hidden_by": None,
-        "entity_category": None,
-    },
+    # A user override, which wins outright -- device prefix and all. Home
+    # Assistant does not compose over a name somebody typed.
+    _registry_entry(
+        entity_id="light.example_lamp",
+        id="registry-one",
+        name="Example Lamp",
+        original_name="Lamp",
+        has_entity_name=True,
+        area_id="example_room",
+        device_id="device_one",
+        unique_id="unique-one",
+    ),
+    # The majority case: names nothing itself, so its whole name is its
+    # device's. Reading the entity row alone renders this one blank.
+    _registry_entry(
+        entity_id="light.example_ceiling",
+        id="registry-two",
+        has_entity_name=True,
+        device_id="device_two",
+        unique_id="unique-two",
+    ),
+    # Names its own half only, so the device supplies the prefix. Reading the
+    # entity row alone renders `Temperature` where Home Assistant shows
+    # `Example Hub Temperature`.
+    _registry_entry(
+        entity_id="sensor.example_temperature",
+        id="registry-three",
+        original_name="Temperature",
+        has_entity_name=True,
+        device_id="device_three",
+        entity_category="diagnostic",
+        unique_id="unique-three",
+    ),
+    # No device at all, so there is nothing to compose with and the entity's own
+    # name stands. This is the minority that the old fixture set made universal.
+    _registry_entry(
+        entity_id="media_player.example_speaker",
+        id="registry-four",
+        original_name="Example Speaker",
+        area_id="example_hall",
+        platform="example",
+        unique_id="unique-four",
+    ),
+    _registry_entry(
+        entity_id="climate.example_thermostat",
+        id="registry-five",
+        original_name="Example Thermostat",
+        platform="example",
+        unique_id="unique-five",
+    ),
+    # Neither a name nor an area of its own: the name comes from the device and
+    # so does the area. Searching for what Home Assistant displays has to find
+    # it, which is the whole point of the registry view.
+    _registry_entry(
+        entity_id="binary_sensor.example_doorway",
+        id="registry-six",
+        has_entity_name=True,
+        device_id="device_four",
+        unique_id="unique-six",
+    ),
+    # `has_entity_name` is false and the entry still takes the device prefix.
+    # It is not a gate on composition: Home Assistant strips the device name
+    # from `original_name` for these integrations *before publishing it*
+    # (`RegistryEntry.as_partial_dict` sends `original_name_unprefixed`), then
+    # composes the two halves back together in
+    # `_async_get_full_entity_name`, which is the single rule behind both this
+    # view and the `friendly_name` on the state above.
+    _registry_entry(
+        entity_id="sensor.example_legacy_meter",
+        id="registry-seven",
+        original_name="Legacy Meter",
+        device_id="device_four",
+        platform="example",
+        unique_id="unique-seven",
+    ),
+    _registry_entry(
+        entity_id="sensor.example_reading",
+        id="registry-eight",
+        original_name="Reading",
+        has_entity_name=True,
+        device_id="device_three",
+        unique_id="unique-eight",
+    ),
+    _registry_entry(
+        entity_id="calendar.example_agenda",
+        id="registry-ten",
+        original_name="Example Agenda",
+        platform="example",
+        unique_id="unique-ten",
+    ),
+    _registry_entry(
+        entity_id="calendar.example_old_agenda",
+        id="registry-eleven",
+        original_name="Example Old Agenda",
+        platform="example",
+        unique_id="unique-eleven",
+    ),
+    # Disabled by its integration, and therefore has no state at all. A registry
+    # entry without a state is ordinary -- every installation has some -- and a
+    # fixture set where every entry had one never exercised the case.
+    _registry_entry(
+        entity_id="sensor.example_disabled_probe",
+        id="registry-nine",
+        original_name="Probe",
+        has_entity_name=True,
+        device_id="device_three",
+        disabled_by="integration",
+        entity_category="diagnostic",
+        unique_id="unique-nine",
+    ),
 ]
 
 AREA_REGISTRY = [
@@ -353,19 +545,38 @@ AREA_REGISTRY = [
 DEVICE_REGISTRY = [
     {
         "id": "device_one",
-        "name": "Example Device One",
+        "name": "Example Lamp Fitting",
         "name_by_user": None,
         "area_id": "example_room",
         "manufacturer": "Example Co",
         "model": "Model X",
     },
     {
+        # A user rename, which is what the display name is composed from -- the
+        # integration's own name is never what gets shown once one exists.
         "id": "device_two",
-        "name": "Example Device Two",
-        "name_by_user": "Renamed Device",
+        "name": "Ceiling Fitting",
+        "name_by_user": "Example Ceiling",
         "area_id": "example_hall",
         "manufacturer": "Example Co",
         "model": "Model Y",
+    },
+    {
+        # A device in no area, which supplies entities in no area.
+        "id": "device_three",
+        "name": "Example Hub",
+        "name_by_user": None,
+        "area_id": None,
+        "manufacturer": "Example Co",
+        "model": "Hub 1",
+    },
+    {
+        "id": "device_four",
+        "name": "Example Doorway",
+        "name_by_user": None,
+        "area_id": "example_room",
+        "manufacturer": "Example Co",
+        "model": "Model Z",
     },
 ]
 
@@ -441,6 +652,27 @@ def capability_masks(description, domain: str) -> list:
         return []
     masks = entry.get("supported_features") or []
     return [m for m in masks if isinstance(m, int) and not isinstance(m, bool)]
+
+
+def displayed_name(entry) -> str:
+    """The name Home Assistant displays for a registry entry.
+
+    A second opinion, written from `helpers/entity_registry` rather than taken
+    from `ha_axi.commands._common`: a double that read the rule off the client
+    could only ever prove the client agrees with itself, and this is the rule the
+    client got wrong. `_async_get_full_entity_name` is called with
+    `parts=(DEVICE, ENTITY)` and `use_legacy_naming=True`, so a `name` somebody
+    set wins outright and everything else is the device's name joined to
+    `original_name` -- which arrives already stripped of any device prefix,
+    because `as_partial_dict` publishes `original_name_unprefixed` under that key.
+    """
+    if entry.get("name"):
+        return entry["name"]
+    device_name = ""
+    for device in DEVICE_REGISTRY:
+        if device["id"] == entry.get("device_id"):
+            device_name = device.get("name_by_user") or device.get("name") or ""
+    return " ".join(part for part in (device_name, entry.get("original_name") or "") if part)
 
 
 def area_of_registry_entry(entry) -> str:
@@ -544,6 +776,39 @@ WS_COMMAND_KEYS = {
 ENTITY_UPDATE_FIELDS = ("name", "icon", "area_id", "disabled_by", "hidden_by", "labels", "aliases")
 
 
+def extended_entry(entry: dict) -> dict:
+    """The larger entry `get` and `update` answer with, which `list` does not.
+
+    `RegistryEntry.extended_dict` is `as_partial_dict` plus five keys, so the two
+    reads of the same entity are not the same shape -- and an entity with no
+    aliases comes back as `[None]`, not `[]`, because the empty alias is
+    serialised rather than dropped. Nothing in `ha-axi` reads any of this today;
+    it is here so that a client which starts to has something honest to read.
+    """
+    return {
+        **entry,
+        "aliases": list(entry.get("aliases") or [None]),
+        "capabilities": None,
+        "device_class": None,
+        "original_device_class": None,
+        "original_icon": None,
+    }
+
+
+def slugify(name: str) -> str:
+    """Home Assistant's own rule for turning an area name into an area_id.
+
+    Non-alphanumerics collapse to a single underscore and the ends are trimmed,
+    so `&` and an apostrophe disappear rather than surviving into the id. A
+    double that only lowercased and replaced spaces handed back an id no real
+    instance would ever mint.
+    """
+    out = []
+    for char in name.lower():
+        out.append(char if char.isalnum() else "_")
+    return "_".join(part for part in "".join(out).split("_") if part)
+
+
 # ------------------------------------------------------------------ REST double
 
 
@@ -633,19 +898,66 @@ class FakeRestServer:
                     for state in outer.state["states"]:
                         if state["entity_id"] == entity_id:
                             return self._send(200, state)
+                    # A routed path whose *subject* is missing says so, in JSON.
+                    # An unrouted one does not -- see `_not_found` below. The two
+                    # are different answers and a client that flattens them tells
+                    # an agent to go looking for a typo in a path that was fine.
                     return self._send(404, {"message": "Entity not found."})
                 if path == "/api/services" and method == "GET":
                     return self._send(200, outer.state["services"])
                 if path.startswith("/api/services/") and method == "POST":
                     name = path[len("/api/services/") :].split("/")
                     if len(name) != 2:
-                        return self._send(404, {"message": "Not found."})
+                        return self._not_found()
                     return self._call_service(name[0], name[1], body, urlparse(self.path).query)
                 if path == "/api/template" and method == "POST":
-                    return self._send(200, outer.state["template"], content_type="text/plain")
-                return self._send(404, {"message": "Not found."})
+                    return self._render_template(body)
+                return self._not_found()
+
+            def _not_found(self):
+                """The bodyless 404 an unrouted path actually gets.
+
+                aiohttp renders its own `404: Not Found` in text/plain; there is
+                no JSON and no message. Answering with `{"message": ...}` here
+                let a client believe every 404 carries something to read.
+                """
+                return self._send(404, "404: Not Found", content_type="text/plain")
+
+            def _render_template(self, body):
+                """Render, or refuse the way Home Assistant refuses.
+
+                A template that does not compile is a `400` naming what went
+                wrong, in JSON. A double that always rendered made the error path
+                unreachable, so nothing ever checked that the message survives.
+                """
+                template = (body or {}).get("template") if isinstance(body, dict) else None
+                if isinstance(template, str) and "undefined_helper" in template:
+                    return self._send(
+                        400,
+                        {
+                            "message": "Error rendering template: UndefinedError: "
+                            "'undefined_helper' is undefined"
+                        },
+                    )
+                return self._send(200, outer.state["template"], content_type="text/plain")
 
             # -- the service call, refusals first -------------------------
+
+            def _server_error(self):
+                """The bodyless 500 a `HomeAssistantError` renders as.
+
+                Home Assistant lets a `HomeAssistantError` out of a service call
+                unhandled, and aiohttp turns it into a plain-text 500 whose body
+                is a fixed apology -- no message, no entity, no service name.
+                Both cases the double models this way were once answered with a
+                helpful JSON `400`, which licensed a client to read a status
+                number and a message that never arrive.
+                """
+                return self._send(
+                    500,
+                    "500 Internal Server Error\n\nServer got itself in trouble",
+                    content_type="text/plain",
+                )
 
             def _bad_request(self):
                 """The empty 400 Home Assistant actually answers with.
@@ -707,6 +1019,12 @@ class FakeRestServer:
                 reaches = target_domains(description) or [domain]
                 fields_sent = {k: v for k, v in data.items() if k not in TARGET_KEYS}
                 changed = []
+                #: The entities the call actually selected, whether or not each
+                #: went on to change. `helpers/service.py` filters candidates by
+                #: availability, then by device class and feature, and asks
+                #: `if not entities` of exactly what is left -- so this list, and
+                #: not the change set, is what decides the `--response` refusal.
+                selected = []
                 for entity_id in entities_targeted(data):
                     state = states.get(entity_id)
                     if state is None or entity_id.split(".", 1)[0] not in reaches:
@@ -721,17 +1039,15 @@ class FakeRestServer:
                     features = (state.get("attributes") or {}).get("supported_features") or 0
                     if masks and not any(features & mask == mask for mask in masks):
                         if entity_id in (data.get("entity_id") or []):
-                            # The status is deliberately not the point: ha-axi
-                            # enriches any refusal of a service call, so the
-                            # client must not read meaning into this number.
-                            return self._send(
-                                400,
-                                {
-                                    "message": f"Entity {entity_id} does not support "
-                                    f"service {domain}.{service}."
-                                },
-                            )
+                            # `entity_service_call` raises `ServiceNotSupported`,
+                            # a `HomeAssistantError`, which reaches the wire as a
+                            # bodyless 500. The status is deliberately not the
+                            # point and neither is the body: ha-axi re-derives
+                            # every refusal from the model, and this is what makes
+                            # that the only thing it *can* do.
+                            return self._server_error()
                         continue
+                    selected.append(entity_id)
                     # Only a state that actually changes comes back, so a
                     # service asked for what already holds answers with an
                     # empty list -- the "nothing to do" half of the pair.
@@ -743,6 +1059,16 @@ class FakeRestServer:
                     changed.append(state)
 
                 if wants_response:
+                    # A response call that reached no entity cannot answer with
+                    # an empty change set, because there is no response to give:
+                    # `helpers/service.py` raises
+                    # `HomeAssistantError("Service call requested response data
+                    # but did not match any entities")` and the wire carries a
+                    # bodyless 500. Answering 200 here made "nothing targeted"
+                    # unreachable for the one call shape that can only fail that
+                    # way, and the client fell through to help about fields.
+                    if not selected:
+                        return self._server_error()
                     return self._send(200, {"changed_states": changed, "service_response": None})
                 return self._send(200, changed)
 
@@ -895,7 +1221,7 @@ class FakeWsServer:
         if type_ == "config/entity_registry/get":
             for entry in self.entities:
                 if entry["entity_id"] == command.get("entity_id"):
-                    return ok(entry)
+                    return ok(extended_entry(entry))
             return fail("not_found", "Entity not found")
         if type_ == "config/entity_registry/update":
             for entry in self.entities:
@@ -913,11 +1239,11 @@ class FakeWsServer:
                 # its device. A double that echoed the request instead would
                 # let a client report an entity's area from its own payload and
                 # never be contradicted.
-                return ok({"entity_entry": entry})
+                return ok({"entity_entry": extended_entry(entry)})
             return fail("not_found", "Entity not found")
         if type_ == "config/area_registry/create":
             area = {
-                "area_id": command["name"].lower().replace(" ", "_"),
+                "area_id": slugify(command["name"]),
                 "name": command["name"],
                 "icon": command.get("icon"),
                 "floor_id": command.get("floor_id"),
@@ -934,6 +1260,39 @@ class FakeWsServer:
                         area[key] = command[key]
                 return ok(area)
             return fail("not_found", "Area not found")
+        if type_ == "config/area_registry/delete":
+            for index, area in enumerate(self.areas):
+                if area["area_id"] != command.get("area_id"):
+                    continue
+                del self.areas[index]
+                # Home Assistant clears the deleted area from everything that
+                # pointed at it rather than leaving dangling ids behind, which
+                # is why a *typo* and not a delete is what strands an entity.
+                for entry in self.entities:
+                    if entry.get("area_id") == command["area_id"]:
+                        entry["area_id"] = None
+                for device in self.devices:
+                    if device.get("area_id") == command["area_id"]:
+                        device["area_id"] = None
+                return ok(None)
+            return fail("not_found", "Area not found")
+        if type_ == "config/device_registry/update":
+            for device in self.devices:
+                if device["id"] != command.get("device_id"):
+                    continue
+                for key in ("name_by_user", "area_id", "disabled_by", "labels"):
+                    if key in command:
+                        device[key] = command[key]
+                return ok(device)
+            return fail("not_found", "Device not found")
+        if type_ == "config/label_registry/list":
+            return ok([])
+        if type_ == "get_config":
+            return ok({"version": "2026.1.0", "location_name": "Example Home"})
+        if type_ == "get_services":
+            return ok({entry["domain"]: entry["services"] for entry in SERVICES})
+        if type_ == "get_states":
+            return ok(STATES)
         return fail("unknown_command", f"Unknown command {type_}")
 
     # -- lifecycle ---------------------------------------------------------

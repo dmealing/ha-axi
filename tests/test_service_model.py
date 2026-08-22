@@ -102,7 +102,7 @@ def test_a_response_only_service_asks_for_the_flag_not_the_query_parameter(run_c
         [
             "service",
             "call",
-            "calendar.get_events",
+            "calendar.list_events",
             "--data",
             "start_date_time=2026-01-01 00:00:00",
         ],
@@ -111,7 +111,7 @@ def test_a_response_only_service_asks_for_the_flag_not_the_query_parameter(run_c
     assert code == 1
     assert "return_response" not in out, "Home Assistant's own vocabulary must not leak"
     assert "--response" in out
-    assert "ha-axi service call calendar.get_events --response" in out
+    assert "ha-axi service call calendar.list_events --response" in out
 
 
 def test_asking_for_a_response_a_service_cannot_give_says_to_drop_the_flag(run_cli, rest_env):
@@ -238,8 +238,11 @@ def test_service_get_reports_the_capability_a_target_must_have(run_cli, rest_env
 
 
 def test_service_get_reports_the_response_mode(run_cli, rest_env):
-    _, out = run_cli(["service", "get", "calendar.get_events"], rest_env)
+    _, out = run_cli(["service", "get", "calendar.list_events"], rest_env)
     assert "response: required" in out
+    assert "--response" in out
+    _, out = run_cli(["service", "get", "calendar.get_events"], rest_env)
+    assert "response: optional" in out
     assert "--response" in out
     _, out = run_cli(["service", "get", "light.turn_on"], rest_env)
     assert "response: none" in out
@@ -448,3 +451,198 @@ def test_target_domains_is_empty_when_the_service_publishes_no_restriction():
     assert servicemodel.target_domains({}) == []
     assert servicemodel.target_domains({"target": {"entity": [{}]}}) == []
     assert servicemodel.target_domains({"target": {"entity": [{"domain": "light"}]}}) == ["light"]
+
+
+def test_a_response_call_that_reached_nothing_gets_the_same_answer_as_one_that_did_not(
+    run_cli, installation_env
+):
+    """Regression: `--response` turned a good diagnosis into a bare HTTP 500.
+
+    Reaching no entity is a `200 []` for an ordinary call, which
+    `_report_target` reads and answers. For a `return_response` call Home
+    Assistant raises `HomeAssistantError("Service call requested response data
+    but did not match any entities")` instead, which aiohttp renders as a
+    bodyless 500 -- so the identical situation arrived with nothing to read and
+    fell through to help about *fields*, which were never the problem.
+
+    `example_room` holds no calendar, so both spellings reach nothing, and both
+    have to say so.
+    """
+    argv = [
+        "service",
+        "call",
+        "calendar.get_events",
+        "--target-area",
+        "example_room",
+        "--data",
+        "start_date_time=2026-01-01 00:00:00",
+    ]
+    with_flag_code, with_flag = run_cli([*argv, "--response"], installation_env)
+    assert with_flag_code == 1
+    assert "NO_ENTITIES_TARGETED" in with_flag
+    assert "matched 0 entities calendar.get_events can act on" in with_flag
+    assert "HTTP_500" not in with_flag
+    assert "to see the fields it takes" not in with_flag
+
+
+def test_a_response_call_that_reached_something_is_untouched_by_that_branch(
+    run_cli, installation_env
+):
+    """The other half, and the one that keeps the double honest.
+
+    The refusal is about reach, so a `--response` call that does reach an entity
+    has to come back 200 -- and the double has to be the thing proving it, or a
+    double that answered 500 for *every* response call would satisfy the test
+    above and be wrong in the opposite direction.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--target-entity",
+            "calendar.example_agenda",
+            "--response",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        installation_env,
+    )
+    assert code == 0
+    assert "NO_ENTITIES_TARGETED" not in out
+    assert "calendar.get_events" in out
+
+
+def test_a_named_entity_outside_the_services_domain_is_reported_as_unreached(
+    run_cli, installation_env
+):
+    # A light is not a calendar, so this reaches nothing -- and says which
+    # entity it was, rather than blaming the fields.
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--target-entity",
+            "light.example_lamp",
+            "--response",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        installation_env,
+    )
+    assert code == 1
+    assert "NO_ENTITIES_TARGETED" in out
+
+
+def test_a_response_call_that_matched_only_unavailable_entities_names_them(
+    run_cli, installation_env
+):
+    """Regression: the re-derived verdict stopped at the domain filter.
+
+    Home Assistant drops `unavailable` candidates before it decides a target
+    matched nothing, so an entity that is in the domain yet unreachable arrives
+    as the same bodyless 500 -- and the verdict used to see the non-empty
+    domain match, give up, and fall through to help about fields. The entity
+    was matched and then skipped, and the verdict has to say that rather than
+    report a match that never happened.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--target-entity",
+            "calendar.example_old_agenda",
+            "--response",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        installation_env,
+    )
+    assert code == 1
+    assert "NO_ENTITIES_TARGETED" in out
+    assert (
+        "entity calendar.example_old_agenda matched 1 entity, but "
+        "calendar.example_old_agenda is unavailable" in out
+    )
+    assert "which Home Assistant skips before matching" in out
+    assert "matched 0 entities" not in out
+    assert "to see the fields it takes" not in out
+
+
+def test_the_same_call_without_response_keeps_reporting_the_silent_skip(run_cli, installation_env):
+    """The 200 half of the pair is a report, not a refusal.
+
+    Without `--response`, Home Assistant answers the skipped entity with an
+    empty change set and says nothing at all, so the call is reported as having
+    matched an entity it skipped -- a different fact from reaching nothing,
+    which is why the two sides of this outcome are not the same verdict.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "calendar.get_events",
+            "--target-entity",
+            "calendar.example_old_agenda",
+            "--data",
+            "start_date_time=2026-01-01 00:00:00",
+        ],
+        installation_env,
+    )
+    assert code == 0
+    assert "matched 1 entity" in out
+    assert (
+        "calendar.example_old_agenda unavailable, which Home Assistant skips without a word" in out
+    )
+    assert "NO_ENTITIES_TARGETED" not in out
+
+
+def test_a_no_check_response_call_names_the_capability_it_lacked(run_cli, installation_env):
+    """The same verdict for the other filter Home Assistant applies.
+
+    Under `--no-check` an incapable entity stays in the target, and once every
+    candidate has been filtered out a service that asks for a response refuses
+    with the same bodyless 500. The verdict names what the entity reports and
+    what the service accepts, rather than blaming the fields.
+    """
+    code, out = run_cli(
+        [
+            "service",
+            "call",
+            "media_player.media_next_track",
+            "--target-area",
+            "example_hall",
+            "--no-check",
+            "--response",
+        ],
+        installation_env,
+    )
+    assert code == 1
+    assert "NO_ENTITIES_TARGETED" in out
+    assert f"media_player.example_speaker reports 3, not any of {FEATURE_NEXT_TRACK}" in out
+    assert "which Home Assistant skips before matching" in out
+    assert "to see the fields it takes" not in out
+
+
+def test_a_device_target_that_reached_nothing_suggests_a_command_that_works(
+    run_cli, installation_env
+):
+    """Regression: the suggestion named a search that could never match.
+
+    A device id was never in `entity list --search`'s haystack, so the line
+    printed here answered `0 registry entries found` every time it was run --
+    and nothing else in the tool went from a device to its entities.
+    """
+    code, out = run_cli(
+        ["service", "call", "light.turn_on", "--target-device", "device_three"],
+        installation_env,
+    )
+    assert code == 1
+    assert "Run `ha-axi entity list --device device_three` to see a device's entities" in out
+
+    # And that line is runnable, which is the whole claim being made.
+    listed_code, listed = run_cli(["entity", "list", "--device", "device_three"], installation_env)
+    assert listed_code == 0
+    assert "sensor.example_temperature" in listed

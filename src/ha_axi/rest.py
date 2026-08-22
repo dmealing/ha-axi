@@ -154,6 +154,20 @@ class RestClient:
                 code="UNAUTHORIZED",
             )
         if exc.code == 404:
+            if detail:
+                # Home Assistant answers an unrouted path with plain text and no
+                # body worth reading, but a routed one whose *subject* is missing
+                # says so in JSON -- `/states/<id>` answers `Entity not found.`.
+                # Reporting the path as wrong in that case sends an agent looking
+                # for a spelling mistake that is not there.
+                return NotFound(
+                    f"Home Assistant answered 404 for {path}: {detail}",
+                    help_lines=[
+                        "Run `ha-axi state list --search <text>` to find an entity by name",
+                        "Run `ha-axi --help` to see the available commands",
+                    ],
+                    code="NOT_FOUND",
+                )
             return NotFound(
                 f"no such API path: {path}",
                 help_lines=["Run `ha-axi --help` to see the available commands"],

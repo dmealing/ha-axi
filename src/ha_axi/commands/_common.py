@@ -20,9 +20,34 @@ def friendly_name(state: dict) -> str:
     return attributes.get("friendly_name") or state.get("entity_id", "")
 
 
-def registry_name(entry: dict) -> str:
-    """The name an entity registry entry presents, user override winning."""
-    return entry.get("name") or entry.get("original_name") or ""
+def registry_name(entry: dict, device_names: dict) -> str:
+    """The name Home Assistant displays for an entity registry entry.
+
+    Home Assistant composes a display name from **two** registries, and reading
+    the entity row alone gets the majority case wrong: most core entities carry
+    no name of their own and take all or part of it from their device. The rule
+    below is `helpers/entity_registry._async_get_full_entity_name`, called with
+    `use_legacy_naming=True` and `parts=(DEVICE, ENTITY)` as
+    `async_get_full_entity_name` calls it:
+
+    * a user override (`name`) wins outright, device prefix and all;
+    * otherwise the device's display name and `original_name` are joined,
+      whichever of the two is present.
+
+    `original_name` needs no unprefixing here: `RegistryEntry.as_partial_dict`
+    already publishes `original_name_unprefixed` under that key when the
+    integration's own name began with the device's, and `extended_dict` is built
+    on top of it, so what arrives over the WebSocket is the entity half alone.
+
+    `device_names` is required rather than optional on purpose: reading the
+    entity row by itself is exactly the defect this replaces, and a default that
+    permitted it would let the defect back in one omitted argument at a time.
+    """
+    if entry.get("name"):
+        return entry["name"]
+    device_name = device_names.get(entry.get("device_id")) or ""
+    parts = [device_name, entry.get("original_name") or ""]
+    return " ".join(part for part in parts if part)
 
 
 def plural(count: int, singular: str, many: str = "") -> str:
@@ -34,6 +59,18 @@ def plural(count: int, singular: str, many: str = "") -> str:
 def device_area_map(devices: list) -> dict:
     """Map each device id to the area it sits in."""
     return {device.get("id"): device.get("area_id") for device in devices}
+
+
+def device_name_map(devices: list) -> dict:
+    """Map each device id to the name Home Assistant displays for it.
+
+    A user rename wins over the integration's, which is the same precedence
+    `device list` reports and the same one entity name composition needs.
+    """
+    return {
+        device.get("id"): (device.get("name_by_user") or device.get("name") or "")
+        for device in devices
+    }
 
 
 def area_name_map(areas: list) -> dict:
@@ -181,6 +218,40 @@ def resolve_area(areas: list, needle: str) -> dict:
     )
 
 
+def resolve_device(devices: list, device_id: str) -> dict:
+    """Find a device by its id, which is the only handle it has.
+
+    A device id is opaque, so unlike an area there is no name to fall back on:
+    an id no device answers to is a failed lookup against the live registry --
+    exit 1, the same side of the line `resolve_area` puts a missing area on --
+    and not an empty result, or an agent that truncates one loops on filter
+    variations instead of re-reading the registry that holds the real spelling.
+    """
+    needle = device_id.strip()
+    for device in devices:
+        if device.get("id") == needle:
+            return device
+    raise NotFound(
+        f"no device with id {needle!r}",
+        help_lines=[
+            "Run `ha-axi device list --fields device_id,name` to see each device's id",
+        ],
+        code="NO_SUCH_DEVICE",
+    )
+
+
+def area_is_placed(area_id: str, areas: list) -> bool:
+    """Whether an `area_id` names an area that actually exists.
+
+    Home Assistant accepts an `area_id` no area claims -- `entity.update` with a
+    mistyped id is taken without complaint -- and an entity left holding one is
+    in no area at all as far as every view is concerned. Treating it as placed
+    is what made such an entity invisible to `--area <id>` and `--area none`
+    alike, and made per-area counts stop summing to the total.
+    """
+    return bool(area_id) and any(area.get("area_id") == area_id for area in areas)
+
+
 def filter_by_area(rows: list, areas: list, area_filter, scope: list) -> list:
     """Narrow rows to one area, or to the ones with none.
 
@@ -192,7 +263,7 @@ def filter_by_area(rows: list, areas: list, area_filter, scope: list) -> list:
         return rows
     if area_filter.strip().lower() in ("none", "null", ""):
         scope.append("with no area")
-        return [row for row in rows if not row["area_id"]]
+        return [row for row in rows if not area_is_placed(row["area_id"], areas)]
     area = resolve_area(areas, area_filter)
     scope.append(f"in area {area.get('name')}")
     return [row for row in rows if row["area_id"] == area.get("area_id")]
