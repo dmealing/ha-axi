@@ -449,7 +449,12 @@ rather than checking a different artefact and calling it green, `auto` (a develo
 consults GitHub when it can and prints `NOT consulted` in the output when it cannot, and `skip` is
 git only, on purpose, which is what the unit tests pass so they never reach the network. There is
 deliberately no silent fallback: silent fallback to the wrong string is precisely the state the
-first version of this guard shipped in.
+first version of this guard shipped in. A per-commit miss is not an
+outage either: the commits endpoint answers 422 for a SHA GitHub does not have, which is the
+ordinary state of a local branch, so `resolve_bodies` reaches the repository once before the loop
+and only then reads a miss as "no pull request" — and names the commits it applied to. Reading a 404
+as "no pull request" without that probe would let a token with no access report an all-clear for
+every commit, which is this same blind spot from the other side.
 
 **The audit reads `--first-parent`, because that is what release-please reads.** It asks GitHub for
 the *merge commits on the branch*, not for everything reachable from it. A plain `git log` would
