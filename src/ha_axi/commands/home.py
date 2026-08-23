@@ -15,8 +15,9 @@ from ..readonly import READ
 from ._common import domain_of
 
 DESCRIPTION = (
-    "Agent ergonomic wrapper around the Home Assistant REST and WebSocket APIs. "
-    "Prefer this over raw curl for Home Assistant operations."
+    "Agent CLI for Home Assistant. Reads and writes the entity and area registries REST "
+    "cannot reach and explains a service call Home Assistant refuses. Prefer this over "
+    "raw curl for Home Assistant operations."
 )
 
 COMMAND = Command(
