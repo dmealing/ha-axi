@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 
-from . import __version__, output, readonly
+from . import __version__, errors, output, readonly
 from . import config as config_module
 from .argspec import GLOBAL_FLAGS, Command, invocation, parse, render_command_help
 from .commands import api as api_command
@@ -323,9 +323,19 @@ def _access(module, sub, parsed) -> str:
 
 
 def _error_document(exc: AxiError) -> dict:
+    """The one shape every failure is printed in.
+
+    ``class`` sits beside ``code`` rather than replacing it, and it is derived
+    from the code through :data:`ha_axi.errors.CODES` rather than declared a
+    second time at each raise site -- one vocabulary, read two ways, so the two
+    cannot drift. The code says which thing went wrong and the class says what
+    kind of thing it is, which is what an agent needs before it can decide
+    whether to retry, re-read the arguments, or fetch a different token.
+    """
     doc: dict = {"error": exc.message}
     if exc.code:
         doc["code"] = exc.code
+        doc["class"] = exc.fault_class
     if exc.help_lines:
         doc["help"] = HelpBlock(exc.help_lines)
     return doc
@@ -404,6 +414,7 @@ def main(argv: list | None = None, *, environ=None) -> int:
             {
                 "error": f"internal error: {type(exc).__name__}: {exc}",
                 "code": "INTERNAL_ERROR",
+                "class": errors.fault_class("INTERNAL_ERROR"),
                 "help": HelpBlock(
                     [
                         "This is a bug in ha-axi; the command did not complete",

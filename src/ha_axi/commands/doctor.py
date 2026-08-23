@@ -74,7 +74,7 @@ def run(ctx, sub: str, parsed):
         )
     except AxiError as exc:
         healthy = False
-        checks.append({"check": "rest", "status": "fail", "detail": exc.message})
+        checks.append(_failed("rest", exc))
 
     try:
         with ctx.ws() as client:
@@ -93,9 +93,28 @@ def run(ctx, sub: str, parsed):
         )
     except AxiError as exc:
         healthy = False
-        checks.append({"check": "websocket", "status": "fail", "detail": exc.message})
+        checks.append(_failed("websocket", exc))
 
     return _document(checks, healthy=healthy, version=version)
+
+
+def _failed(check: str, exc: AxiError) -> dict:
+    """One failed check, carrying the same code and class the command would.
+
+    `doctor` already told the two transports apart; what it could not tell
+    apart was *why* either had failed, because a check row carried prose and
+    nothing else. The row now says which fault it was in the same vocabulary
+    every other command answers in -- and because the two transports run
+    independently here, a row each is how "the token is wrong" and "the proxy
+    does not forward upgrades" become two readable facts instead of one
+    unhealthy instance.
+    """
+    row = {"check": check, "status": "fail"}
+    if exc.code:
+        row["code"] = exc.code
+        row["class"] = exc.fault_class
+    row["detail"] = exc.message
+    return row
 
 
 def _document(checks, *, healthy: bool, version: str = ""):

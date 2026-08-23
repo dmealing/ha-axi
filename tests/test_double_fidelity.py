@@ -342,3 +342,78 @@ def test_the_doubles_refusals_carry_no_body_where_home_assistant_carries_none(re
     body = raised.value.read().decode()
     assert "media_player" not in body
     assert "does not support" not in body
+
+
+def _refused(rest_server, *, token=None, path="/api/states"):
+    """One request against the REST double, returning the refusal it raised."""
+    import urllib.error
+    import urllib.request
+
+    from conftest import FAKE_TOKEN
+
+    request = urllib.request.Request(
+        f"{rest_server.url}{path}",
+        headers={"Authorization": f"Bearer {FAKE_TOKEN if token is None else token}"},
+    )
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        urllib.request.urlopen(request, timeout=5)
+    return raised.value
+
+
+def test_a_rejected_token_explains_nothing_because_a_real_one_does_not(rest_server):
+    """401 is aiohttp's own status line in text/plain, and nothing else.
+
+    `helpers/http.py` raises a bare `HTTPUnauthorized` when a view requires auth
+    and the request has none, and an `HTTPException` with no text renders as
+    `"<status>: <reason>"`. The double used to answer `{"message":
+    "Unauthorized"}`, which is generous in exactly the way that lets a client
+    pass by reading a field a real instance never sends.
+    """
+    refusal = _refused(rest_server, token="not-the-right-token")
+    assert refusal.code == 401
+    assert refusal.headers.get("Content-Type", "").startswith("text/plain")
+    assert refusal.read().decode() == "401: Unauthorized"
+
+
+def test_a_banned_address_is_refused_before_the_token_is_read(rest_server):
+    """403 comes from a middleware, which is why a valid token does not help.
+
+    `components/http/ban.py` raises a bare `HTTPForbidden` for an address in
+    `ip_bans_lookup` before the handler runs at all. Modelling it as a refusal
+    the token could have avoided would make the whole point of the class --
+    that minting a new token is the wrong next move -- untestable.
+    """
+    rest_server.forbidden = True
+    refusal = _refused(rest_server)
+    assert refusal.code == 403
+    assert refusal.read().decode() == "403: Forbidden"
+
+
+def test_a_restarting_instance_answers_with_no_body_at_all(rest_server):
+    """503 while `hass.is_stopping`, and it is not even an `HTTPException`.
+
+    `helpers/http.py` returns `web.Response(status=SERVICE_UNAVAILABLE)` -- a
+    plain response, so there is no `"503: ..."` line either. Nothing to read at
+    all is the shape, and a client that needed a reason here would have none.
+    """
+    rest_server.stopping = True
+    refusal = _refused(rest_server)
+    assert refusal.code == 503
+    assert refusal.read() == b""
+
+
+def test_an_unknown_websocket_command_is_refused_without_naming_itself(ws_server, ws_env):
+    """`connection.py` sends a fixed `"Unknown command."` and logs the type.
+
+    The type never travels: it goes to `logger.info`, not into the message. A
+    double that echoed it back would let a client read a command name out of a
+    message that has never carried one.
+    """
+    from ha_axi.config import load
+    from ha_axi.errors import NotFound
+    from ha_axi.ws import WsClient
+
+    with WsClient(load(ws_env)) as client, pytest.raises(NotFound) as raised:
+        client.send_command("config/nothing_registry/list")
+    assert raised.value.code == "NO_SUCH_WS_COMMAND"
+    assert [c for c in ws_server.received if c["type"] == "config/nothing_registry/list"]

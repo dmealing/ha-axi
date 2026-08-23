@@ -77,6 +77,7 @@ Every write is then refused **before it is sent**, over REST and over the WebSoc
 $ ha-axi entity update light.example_lamp --name 'Reading Lamp'
 error: "`ha-axi entity update` is a write, and HA_AXI_READ_ONLY is set"
 code: READ_ONLY
+class: usage
 help[3]:
   This session is read-only; the command was refused before anything changed
   Reads still work, e.g. `ha-axi state list`, `ha-axi entity list`, `ha-axi area list`
@@ -253,6 +254,78 @@ delimiter-joined TOON array. Suggestions are command lines that routinely contai
 is the shape the AXI standard and the sibling AXI CLIs use. Every **data** structure is strict TOON,
 and "strict" is a test result rather than a claim: the specification's own conformance fixtures are
 vendored into the suite and every one of them has to pass.
+
+## Error codes
+
+Every failure carries a `code` naming the one thing that went wrong, and a `class` naming the kind
+of thing it is. The class is what to switch on: it is the difference between retrying, changing the
+arguments, and fetching a different token.
+
+```sh
+$ ha-axi state list
+error: "could not reach Home Assistant: [Errno 111] Connection refused"
+code: UNREACHABLE
+class: transport
+help[2]:
+  Check HA_URL points at a reachable Home Assistant instance
+  Run `ha-axi doctor` to test the connection
+```
+
+<!-- error-codes:start -->
+
+| class | what happened | what to do next |
+| --- | --- | --- |
+| `usage` | the invocation is wrong; nothing was sent | change the command line |
+| `config` | this machine is not set up to talk to Home Assistant | change the environment |
+| `transport` | Home Assistant was not reached, or is not serving | change nothing and retry |
+| `auth` | the credential was rejected | mint a new long-lived access token |
+| `permission` | the credential was accepted; the caller is not permitted | use a different account, or lift the block on the instance |
+| `not_found` | the subject named does not resolve to one thing that exists here | look it up and ask again |
+| `refused` | the subject exists and this request was refused | change the arguments |
+| `internal` | a bug in ha-axi | report it |
+
+Three of those are the ones that used to be indistinguishable, and they demand opposite responses.
+An agent that cannot tell a rejected token from a command this version does not have retries the
+token forever; one that cannot tell either from an unreachable host reports that Home Assistant is
+down when it is not. `permission` is a fourth: Home Assistant answers "your credential is fine, you
+are not allowed" on both transports — a banned address over REST, an account that is not an
+administrator over the WebSocket — and a new token fixes neither.
+
+The whole vocabulary, which is closed:
+
+- `usage` — `UNKNOWN_COMMAND`, `UNKNOWN_SUBCOMMAND`, `MISSING_SUBCOMMAND`, `UNKNOWN_FLAG`,
+  `MISSING_VALUE`, `MISSING_ARGUMENT`, `UNEXPECTED_ARGUMENT`, `CONFLICTING_FLAGS`, `UNKNOWN_FIELD`,
+  `BAD_LIMIT`, `BAD_TIMEOUT`, `BAD_JSON`, `BAD_PAIR`, `BAD_SERVICE`, `MISSING_PATH`, `MISSING_NAME`,
+  `MISSING_TEMPLATE`, `MISSING_COMMAND`, `MISSING_PARAM`, `NO_CHANGES`, `NO_SUCH_COMMAND`,
+  `UNREADABLE`, `UNREADABLE_FILE`, `UNWRITABLE`, `READ_ONLY`
+- `config` — `NOT_CONFIGURED`, `BAD_URL`, `BAD_TOKEN`, `MISSING_DEPENDENCY`, `REDIRECT_REFUSED`
+- `transport` — `UNREACHABLE`, `TIMEOUT`, `TLS_ERROR`, `CONNECTION_DROPPED`, `UNAVAILABLE`,
+  `WS_HANDSHAKE`, `WS_CLOSED`, `WS_PROTOCOL`
+- `auth` — `UNAUTHORIZED`
+- `permission` — `FORBIDDEN`
+- `not_found` — `NOT_FOUND`, `NO_SUCH_ENTITY`, `NO_SUCH_AREA`, `AMBIGUOUS_AREA`, `NO_SUCH_DEVICE`,
+  `NO_SUCH_DOMAIN`, `NO_SUCH_SERVICE`, `NO_ENTITIES_TARGETED`, `NO_SUCH_WS_COMMAND`,
+  `NO_WEBSOCKET_API`
+- `refused` — `BAD_REQUEST`, `METHOD_NOT_ALLOWED`, `SERVER_ERROR`, `API_ERROR`, `INVALID_FORMAT`,
+  `NOT_ALLOWED`, `NOT_SUPPORTED`, `HOME_ASSISTANT_ERROR`, `SERVICE_VALIDATION_ERROR`,
+  `TEMPLATE_ERROR`, `UNKNOWN_SERVICE_FIELD`, `MISSING_SERVICE_FIELD`, `UNSUPPORTED_CAPABILITY`,
+  `RESPONSE_REQUIRED`, `RESPONSE_NOT_SUPPORTED`
+- `internal` — `INTERNAL_ERROR`, `ID_REUSE`
+
+<!-- error-codes:end -->
+
+Two properties hold across the whole table, and both are enforced by the suite rather than promised
+here. **The vocabulary is closed**: a code is always written out at the point it is raised, never
+built from a status number or from a string a server sent, so the set above is the whole set and a
+caller can switch over it exhaustively. **Classification happens at the transport boundary** —
+`RestClient.request` and `WsClient.send_command` — and never in a command body, so a command added
+later is classified whether or not its author knew the taxonomy existed. `tests/test_error_codes.py`
+runs every subcommand against every fault on both transports and fails on the first one that cannot
+say which class it met.
+
+Coverage is bounded, and worth saying plainly: the class is as good as what Home Assistant puts on
+the wire. A refusal it renders with no body and no reason — several are — is classified by its
+status and nothing more.
 
 ## Agent integration
 

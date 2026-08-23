@@ -127,6 +127,10 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   is not worth it.
 - `servicemodel.py` — a pure reader for what `GET /api/services` publishes. No I/O and no cache:
   the caller fetches, and decides whether the answer is worth the round-trip.
+- `errors.py` — the error types, the eight fault classes, and `CODES`: the closed vocabulary of
+  every code this tool can print, each mapped to its class. It imports nothing at all, so every
+  other module can depend on it. See "The error taxonomy" below; the short version is that the class
+  is derived from the code and never declared beside it, and that a code is always a literal.
 - `readonly.py` — the `HA_AXI_READ_ONLY` gate: the classification vocabulary, the switch reader,
   the refusal, and the one `guard()` all three enforcement points call. It imports nothing but
   `errors`, so `config`, `rest`, `ws` and `cli` can all depend on it without a cycle.
@@ -304,6 +308,139 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 - **A diagnostic read must not fail a call that worked.** The target report needs the registries,
   which the REST-only path cannot supply. If that read fails, the report says so and the exit code
   stays 0: the call itself was accepted, and turning it into an error would be a fresh untruth.
+
+## The error taxonomy
+
+Every failure carries a `code` and a `class`. The code names the one thing that went wrong; the
+class names the kind of thing it is, and the class is what a caller switches on before it can decide
+whether to retry, change the arguments, or fetch a different token. Both are printed by
+`cli._error_document`, and the class is **derived** from the code through `errors.CODES` rather than
+declared a second time at each raise site — one vocabulary read two ways, so the two cannot drift.
+
+**The vocabulary is closed, and that is the whole mechanism.** `errors.CODES` is every code this
+tool can print, mapped to its class. Two places used to mint codes from whatever a server said —
+`f"HTTP_{exc.code}"` in `rest._http_error` and `error["code"].upper()` in `ws._command_error` — so
+the published vocabulary was "the set of HTTP statuses" plus "anything Home Assistant might ever
+name". No caller can switch over that exhaustively, and no table can ever claim to be complete
+against it. `tests/test_error_codes.py` sweeps the source with `ast` and fails on a `code=` that is
+**built** rather than named: an f-string, a concatenation, a method call. A bare name is allowed,
+because `ws._command_error` genuinely has to hand one along, and the one table it reads —
+`ws.WS_ERROR_CODES` — is pinned separately. The same file fails on a declared code that nothing
+raises, so an entry that has outlived its cause surfaces here rather than in a caller's `match`.
+
+**`errors.CODES` and the README's error-code section are pinned to each other.** `documented` means
+documented: the section between the `<!-- error-codes:start -->` markers is parsed and compared for
+equality, the way the generated skill is compared against the command table. Do not put a backticked
+all-capitals token inside those markers that is not a code — the check reads them all.
+
+**The classes are eight, and the two people get wrong are `auth`/`permission` and
+`transport`/`refused`.**
+
+| class | what happened | what to change |
+| --- | --- | --- |
+| `usage` | the invocation is wrong; nothing was sent | the command line |
+| `config` | this machine is not set up | the environment |
+| `transport` | not reached, or reached and not serving | nothing — retry |
+| `auth` | the credential was rejected | the token |
+| `permission` | the credential was accepted; the caller is not permitted | the account, or a block on the instance |
+| `not_found` | the subject does not resolve to one thing that exists here | what you asked for |
+| `refused` | the subject exists and this request was refused | the arguments |
+| `internal` | a bug in ha-axi | nothing; report it |
+
+`fault_class` fails closed to `unclassified`, which is deliberately **not** a member of `CLASSES`:
+it is the absence of an answer, it is unreachable while the sweep passes, and it exists so that a
+code that escaped the sweep says so out loud instead of being filed under a class it does not belong
+to. Guessing the class from the exception type is the tempting alternative and it is wrong — one
+`ConnectionFailed` is a missing Python package (`config`) and another is a dropped socket
+(`transport`).
+
+**Enforcement is at the transport boundary, never in a command body** — `rest._http_error` /
+`rest._url_error` and `ws._connect_error` / `ws._command_error` — for exactly the reason the
+read-only gate enforces at `RestClient.request` and `WsClient.send_command`: a command added later is
+classified whether or not its author knew the taxonomy existed. `tests/test_error_codes.py` runs
+**every** subcommand from `cli._MODULES` against **every** fault on **both** transports and fails on
+the first one that cannot name its class. `INVOCATIONS` there is maintained by hand, because only a
+person knows what arguments a command needs, but it is never *enumerated* by hand: it is reconciled
+against the dispatch table, and `LOCAL_ONLY` names the two subcommands that reach no transport, so
+"it does not touch Home Assistant" is a claim somebody made rather than a gap nobody noticed.
+
+### What Home Assistant actually returns, and why each split is a fact rather than a preference
+
+Every mapping below was read out of `home-assistant/core` at 2026.8.3 rather than guessed, which is
+the same rule the doubles are held to.
+
+- **401 and 403 are not one answer.** 401 is a bare `HTTPUnauthorized` from `helpers/http.py` when a
+  view requires auth and the request has none — a rejected credential, fixed by a new token. 403 is a
+  bare `HTTPForbidden` from `components/http/ban.py`, raised by a **middleware** for an address in
+  `ip_bans_lookup`, before any view reads the token. Telling an agent to mint a token there sends it
+  to fail another login against an instance that already banned it, which is how the ban got deeper.
+  `UNAUTHORIZED` and `FORBIDDEN`; `auth` and `permission`.
+- **`unauthorized` over the WebSocket is a permission, not an auth failure.** It can only arrive
+  *after* `auth_ok`: `connection.async_handle_exception` maps `exceptions.Unauthorized` to it, which
+  is what `@require_admin` raises for an account that is not an administrator. The token is valid.
+  A new one for the same account changes nothing. `auth_invalid` during the handshake is the auth
+  failure, and it is the only one on that transport.
+- **`unknown_command` is a `not_found` with a code of its own.** Home Assistant answers
+  `{"code": "unknown_command", "message": "Unknown command."}` — a fixed string; the type it did not
+  recognise goes to `logger.info` and never onto the wire. Uppercased, that became `UNKNOWN_COMMAND`,
+  which is already what this CLI calls a command *it* does not have: one string for "read `--help`"
+  and for "this Home Assistant version cannot do that", which are opposite next moves. It is
+  `NO_SUCH_WS_COMMAND` now, and the collision is what the split exists to remove.
+- **502, 503 and 504 are transport, not refusal.** `helpers/http.py` answers every request with
+  `web.Response(status=SERVICE_UNAVAILABLE)` while `hass.is_stopping` — a plain response, so not even
+  aiohttp's `"503: ..."` line, nothing to read at all — and a proxy in front of a restarting instance
+  answers 502 or 504 for the same window. The request was never seen, so retrying it unchanged is
+  correct, which is precisely what `transport` means and what `refused` would tell an agent not to do.
+  500 stays `refused`: it is what a `HomeAssistantError` renders as, and the request was seen.
+- **`id_reuse` is `internal`.** This client mints its own ids, so only a bug here can produce it.
+  That the class is not simply a relabel of the server's code is the point of having one.
+
+### The two transports had disagreed about one fault, and that was the quiet half of the defect
+
+`ssl.SSLError` and `socket.timeout` are both `OSError` subclasses, so `ws.connect`'s
+`except (TimeoutError, OSError)` reported a certificate this machine will not accept, a host that
+never answered and a refused connection all as `WS_UNREACHABLE`, while REST called the same three
+faults `TLS_ERROR`, `TIMEOUT` and `UNREACHABLE`. An agent that learnt the vocabulary on one transport
+was wrong on the other, for faults with one cause and one fix each. `ws._connect_error` now reaches
+the same three codes, and which transport met the fault stays in the *message*, where it belongs,
+because it is not what the caller has to change. `WS_HANDSHAKE` survives as the fault genuinely
+specific to this transport — the TCP connection was made and the HTTP upgrade was refused, which is
+what a proxy that does not forward WebSockets does — and a refusal that carries a status is
+classified by it, so a 404 at the upgrade is `NO_WEBSOCKET_API` rather than a vague handshake
+failure. The status is read by attribute (`.response.status_code`, then `.status_code`) rather than
+by catching `websockets.exceptions`, because `InvalidStatus` replaced `InvalidStatusCode` and this
+project declares a floor rather than a pin: a version bump must not silently downgrade a classified
+failure to an unclassified one.
+
+**A timeout is one fault however the exchange ran out of time.** urllib wraps an `OSError` raised
+while *sending* into a `URLError` (`AbstractHTTPHandler.do_open`), so a connect timeout arrived at
+`_url_error` and was reported as `UNREACHABLE`, while a timeout waiting for the *response*
+propagates as a bare `TimeoutError` and was reported as `TIMEOUT`. Which half ran out is not
+something a caller can act on.
+
+### The two views that reported a failure with no code at all
+
+`home` and `doctor` catch `AxiError` and fold it into their own document rather than letting it
+reach `cli._error_document`, so neither printed a code. `home` is the landing view `setup hooks` puts
+in front of **every** agent session — the most-read error surface the tool has, and the one that
+could not be classified. Both carry `code` and `class` now: `home` at the top level, `doctor` on the
+failing check row, which is what makes the case a reverse proxy actually produces — REST answering
+and the WebSocket upgrade refused — two readable facts instead of one unhealthy instance. A failing
+`doctor` therefore renders its `checks` block in **list** form rather than tabular, because the rows
+stop being uniform; a healthy one is still tabular and `test_doctor_still_answers_healthy_in_tabular_form`
+pins that.
+
+### Fixtures for this live in the doubles, and they were too generous
+
+`FakeRestServer` answered 401 with `{"message": "Unauthorized"}` — a field no real instance sends —
+and modelled neither 403 nor 503 at all. It now answers 401 and 403 with aiohttp's own plain-text
+status line, 503 with nothing whatsoever, and applies them in Home Assistant's order: the ban
+middleware, then `is_stopping`, then the router, then the token. `forbidden`, `stopping` and
+`unrouted` are the switches; `FakeWsServer.fail_all` is the WebSocket equivalent, persistent rather
+than one-shot because that is the shape the interesting faults have — a non-admin token is refused by
+every `@require_admin` command it ever sends. `tests/test_double_fidelity.py` asserts each of those
+shapes, so a fixture edit that tidies one away fails where the reason is written down.
+
 
 ## The read-only gate
 

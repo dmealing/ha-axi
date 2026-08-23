@@ -16,7 +16,14 @@ import urllib.request
 from typing import Any
 
 from .config import Config
-from .errors import ApiError, AuthFailed, ConnectionFailed, NotFound
+from .errors import (
+    UNAVAILABLE_STATUSES,
+    ApiError,
+    AuthFailed,
+    ConnectionFailed,
+    Forbidden,
+    NotFound,
+)
 from .output import debug
 from .readonly import READ, WRITE, guard
 
@@ -143,12 +150,13 @@ class RestClient:
             raise self._http_error(exc, method, path) from None
         except urllib.error.URLError as exc:
             raise self._url_error(exc) from None
-        except (TimeoutError, socket.timeout):
-            raise ConnectionFailed(
-                f"timed out after {self.config.timeout:g}s waiting for Home Assistant",
-                help_lines=["Raise the limit with `ha-axi --timeout 60 <command>`"],
-                code="TIMEOUT",
-            ) from None
+        except (TimeoutError, socket.timeout) as exc:
+            # A timeout waiting for the response is not wrapped in a URLError
+            # -- `http.client` raises it out of `getresponse()` and urllib lets
+            # it through -- so it arrives here rather than above. Same
+            # classifier either way: which half of the exchange ran out of time
+            # is not a fact the caller can act on.
+            raise self._url_error(exc) from None
         except (http.client.HTTPException, OSError) as exc:
             raise ConnectionFailed(
                 f"the connection to Home Assistant dropped mid-response: {exc}",
@@ -176,6 +184,36 @@ class RestClient:
         return url
 
     def _http_error(self, exc, method: str, path: str):
+        """Classify one HTTP status, once, for every REST command there is.
+
+        The status is the only fact a refusal reliably carries -- Home Assistant
+        renders most of them through aiohttp with a plain-text ``"<status>:
+        <reason>"`` body and nothing else -- so the mapping has to be by status
+        and the resulting code has to be a literal. It used to end in
+        ``code=f"HTTP_{exc.code}"``, which minted a fresh code from whatever the
+        server said: no caller could switch on the result, because the set it
+        was switching over was the set of HTTP statuses rather than a vocabulary
+        anybody had written down.
+
+        Three splits here are the substance of the taxonomy, and each is a fact
+        about Home Assistant rather than a preference:
+
+        - **401 and 403 are not one answer.** 401 is a rejected credential and a
+          new token fixes it. 403 is what the IP-ban middleware raises
+          (``components/http/ban.py`` answers a banned address with a bare
+          ``HTTPForbidden`` before any view runs), and a new token cannot fix
+          it -- worse, minting one and failing the login again is what deepened
+          the ban in the first place.
+        - **502, 503 and 504 are transport, not refusal.** ``hass.is_stopping``
+          answers every request with a bodyless 503 while an instance restarts,
+          and a reverse proxy in front of one answers 502 or 504 for the same
+          window. The request was never seen, so retrying it as-is is correct --
+          which is exactly what the transport class means and what a `refused`
+          would tell an agent not to do.
+        - **500 is a refusal.** It is what a ``HomeAssistantError`` renders as:
+          a named entity lacking a capability, or a ``--response`` call that
+          matched nothing. Reached, permitted, and refused.
+        """
         detail = ""
         try:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -185,7 +223,7 @@ class RestClient:
             detail = ""
         detail = (detail or "").strip()
 
-        if exc.code in (401, 403):
+        if exc.code == 401:
             return AuthFailed(
                 "Home Assistant rejected the access token",
                 help_lines=[
@@ -193,6 +231,17 @@ class RestClient:
                     "Create a new one on your Home Assistant profile page, under Security",
                 ],
                 code="UNAUTHORIZED",
+            )
+        if exc.code == 403:
+            return Forbidden(
+                "Home Assistant refused this client: the token was not the problem",
+                help_lines=[
+                    "A new token will not help; the request was refused before any view ran",
+                    "Home Assistant bans an address after repeated failed logins -- "
+                    "clear it from `ip_bans.yaml` on the instance and restart it",
+                    "Check whether a proxy in front of Home Assistant is refusing the request",
+                ],
+                code="FORBIDDEN",
             )
         if exc.code == 404:
             if detail:
@@ -220,18 +269,54 @@ class RestClient:
                 help_lines=["Run `ha-axi api --help` for the supported methods"],
                 code="METHOD_NOT_ALLOWED",
             )
-        return ApiError(
-            f"Home Assistant returned HTTP {exc.code}" + (f": {detail}" if detail else ""),
-            code=f"HTTP_{exc.code}",
-        )
+        if exc.code in UNAVAILABLE_STATUSES:
+            return ConnectionFailed(
+                f"Home Assistant is not serving requests right now (HTTP {exc.code})"
+                + (f": {detail}" if detail else ""),
+                help_lines=[
+                    "Retry the command; an instance answers this way while it restarts",
+                    "Run `ha-axi doctor` if it keeps answering this way",
+                ],
+                code="UNAVAILABLE",
+            )
+        suffix = f": {detail}" if detail else ""
+        if exc.code == 400:
+            return ApiError(
+                f"Home Assistant refused the request (HTTP 400){suffix}",
+                code="BAD_REQUEST",
+            )
+        if exc.code == 500:
+            return ApiError(
+                f"Home Assistant failed while handling the request (HTTP 500){suffix}",
+                code="SERVER_ERROR",
+            )
+        return ApiError(f"Home Assistant returned HTTP {exc.code}{suffix}", code="API_ERROR")
 
     def _url_error(self, exc):
+        """Classify a failure to complete the exchange at all.
+
+        A timeout arrives by two routes and used to be reported as two
+        different faults. urllib wraps an ``OSError`` raised while sending into
+        a ``URLError`` (``AbstractHTTPHandler.do_open``), so a connect timeout
+        landed here and was reported as ``UNREACHABLE``, while a timeout
+        waiting for the response propagates as a bare ``TimeoutError`` and was
+        reported as ``TIMEOUT``. One fault, one fix, and which half of the
+        exchange ran out of time is not the caller's business.
+        """
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, ssl.SSLError):
             return ConnectionFailed(
                 f"TLS handshake with Home Assistant failed: {reason}",
                 help_lines=["Confirm HA_URL uses the scheme your instance actually serves"],
                 code="TLS_ERROR",
+            )
+        # `socket.timeout` is an alias of `TimeoutError` from 3.10; on 3.9 it is
+        # a distinct OSError subclass, so both are named.
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return ConnectionFailed(
+                f"timed out after {self.config.timeout:g}s waiting for Home Assistant",
+                help_lines=["Raise the limit with `ha-axi --timeout 60 <command>`"],
+                code="TIMEOUT",
             )
         return ConnectionFailed(
             f"could not reach Home Assistant: {reason}",

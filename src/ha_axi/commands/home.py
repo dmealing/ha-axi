@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..argspec import Command, Sub
 from ..config import missing_env_vars, setup_help
-from ..errors import AxiError
+from ..errors import AxiError, fault_class
 from ..output import HelpBlock
 from ..readonly import ENV_VAR as READ_ONLY_VAR
 from ..readonly import READ
@@ -51,7 +51,14 @@ def run(ctx, sub: str, parsed):
     doc = {"bin": executable_path(), "description": DESCRIPTION}
     missing = missing_env_vars(ctx.environ)
     if missing:
+        # Coded like every other failure. This view is what `setup hooks` puts
+        # in front of every agent session, so it is the most-read error surface
+        # the tool has -- and until now the only one that reported a failure
+        # with no code at all, leaving the one view an agent always sees as the
+        # one it could not classify.
         doc["error"] = f"{' and '.join(missing)} not set in the environment"
+        doc["code"] = "NOT_CONFIGURED"
+        doc["class"] = fault_class("NOT_CONFIGURED")
         doc["help"] = HelpBlock(setup_help())
         doc["__exit_code__"] = 1
         return doc
@@ -69,6 +76,9 @@ def run(ctx, sub: str, parsed):
         states = ctx.rest().states()
     except AxiError as exc:
         doc["error"] = exc.message
+        if exc.code:
+            doc["code"] = exc.code
+            doc["class"] = exc.fault_class
         doc["help"] = HelpBlock(
             [*exc.help_lines, "Run `ha-axi doctor` to see which transport is failing"]
         )
