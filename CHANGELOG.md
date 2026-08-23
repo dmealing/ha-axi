@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/dmealing/ha-axi/compare/v0.3.4...v0.4.0) (2026-08-23)
+
+
+### Features
+
+* **cli:** a read-only mode that holds on both transports, and fails closed ([91a574b](https://github.com/dmealing/ha-axi/commit/91a574b5b64555f0e03e29152dd62682a43f4617))
+
 ## [0.3.4](https://github.com/dmealing/ha-axi/compare/v0.3.3...v0.3.4) (2026-08-22)
 
 
