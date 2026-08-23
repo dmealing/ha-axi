@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..argspec import Command, Sub
 from ..config import describe_environment, missing_env_vars, setup_help
-from ..errors import AxiError
+from ..errors import AxiError, fault_class
 from ..output import HelpBlock
 from ..readonly import READ
 from ._common import plural
@@ -41,13 +41,7 @@ def run(ctx, sub: str, parsed):
 
     missing = missing_env_vars(ctx.environ)
     if missing:
-        checks.append(
-            {
-                "check": "environment",
-                "status": "fail",
-                "detail": f"{' and '.join(missing)} not set",
-            }
-        )
+        checks.append(_failed("environment", f"{' and '.join(missing)} not set", "NOT_CONFIGURED"))
         return _document(checks, healthy=False)
 
     checks.append(
@@ -74,7 +68,7 @@ def run(ctx, sub: str, parsed):
         )
     except AxiError as exc:
         healthy = False
-        checks.append({"check": "rest", "status": "fail", "detail": exc.message})
+        checks.append(_failed("rest", exc.message, exc.code))
 
     try:
         with ctx.ws() as client:
@@ -93,9 +87,34 @@ def run(ctx, sub: str, parsed):
         )
     except AxiError as exc:
         healthy = False
-        checks.append({"check": "websocket", "status": "fail", "detail": exc.message})
+        checks.append(_failed("websocket", exc.message, exc.code))
 
     return _document(checks, healthy=healthy, version=version)
+
+
+def _failed(check: str, message: str, code: str | None) -> dict:
+    """One failed check, carrying the same code and class the command would.
+
+    `doctor` already told the two transports apart; what it could not tell
+    apart was *why* either had failed, because a check row carried prose and
+    nothing else. The row now says which fault it was in the same vocabulary
+    every other command answers in -- and because the two transports run
+    independently here, a row each is how "the token is wrong" and "the proxy
+    does not forward upgrades" become two readable facts instead of one
+    unhealthy instance.
+
+    The environment check goes through here too: a machine with nothing
+    configured is a fault with a code like any other, and the one `home`
+    already answers the same condition with. The class is derived from the
+    code rather than written beside it, so `errors.CODES` stays the only
+    place the pair is declared.
+    """
+    row = {"check": check, "status": "fail"}
+    if code:
+        row["code"] = code
+        row["class"] = fault_class(code)
+    row["detail"] = message
+    return row
 
 
 def _document(checks, *, healthy: bool, version: str = ""):

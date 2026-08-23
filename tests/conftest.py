@@ -824,6 +824,21 @@ class FakeRestServer:
             "service_result": None,
         }
         self.status_override = None
+        #: The address is banned. `components/http/ban.py` raises a bare
+        #: `HTTPForbidden` from a middleware, so this answers before the token
+        #: is looked at -- which is the whole point of the fault: a valid token
+        #: does not get past it either.
+        self.forbidden = False
+        #: `hass.is_stopping`. `helpers/http.py` answers every request with
+        #: `web.Response(status=SERVICE_UNAVAILABLE)` while an instance shuts
+        #: down: no body at all, not even aiohttp's `"503: ..."` line, because
+        #: a bare `web.Response` is not an `HTTPException`.
+        self.stopping = False
+        #: Nothing is routed under `/api`. aiohttp's router misses before any
+        #: view runs, so this answers ahead of the token check, exactly as an
+        #: unrouted path does on a real instance -- which is why the 404 it
+        #: sends carries no body worth reading.
+        self.unrouted = False
         #: Seconds to stall before answering, for exercising client timeouts.
         self.delay = 0.0
         #: Answer with this raw body and Content-Type: application/json.
@@ -884,8 +899,21 @@ class FakeRestServer:
                 if outer.status_override is not None:
                     code, payload = outer.status_override
                     return self._send(code, payload)
+                # The order is Home Assistant's: the ban middleware runs before
+                # any view, `hass.is_stopping` is the first thing the view
+                # handler checks, and only then is the token read.
+                if outer.forbidden:
+                    return self._send(403, "403: Forbidden", content_type="text/plain")
+                if outer.stopping:
+                    return self._send(503, b"", content_type="application/octet-stream")
+                if outer.unrouted:
+                    return self._not_found()
                 if not self._authorized():
-                    return self._send(401, {"message": "Unauthorized"})
+                    # aiohttp renders a bare `HTTPUnauthorized` as its own
+                    # status line in text/plain. It carries no JSON and no
+                    # `message` key: answering with one let a client believe a
+                    # rejected token explains itself, and it never does.
+                    return self._send(401, "401: Unauthorized", content_type="text/plain")
 
                 if path == "/api/":
                     return self._send(200, {"message": "API running."})
@@ -1118,6 +1146,12 @@ class FakeWsServer:
         self.areas = [json.loads(json.dumps(a)) for a in AREA_REGISTRY]
         self.devices = [json.loads(json.dumps(d)) for d in DEVICE_REGISTRY]
         self.fail_next = None
+        #: A refusal that applies to *every* command rather than the next one.
+        #: That is the shape the interesting faults actually have: a non-admin
+        #: token is refused `unauthorized` by every `@require_admin` command it
+        #: ever sends, and an instance that predates a command answers
+        #: `unknown_command` to it forever.
+        self.fail_all = None
         self.close_after = None
         #: Frames to emit before the next command result, e.g. an event or a
         #: pong, which a real instance interleaves freely.
@@ -1184,6 +1218,13 @@ class FakeWsServer:
             error = self.fail_next
             self.fail_next = None
             return {"id": message_id, "type": "result", "success": False, "error": error}
+        if self.fail_all is not None:
+            return {
+                "id": message_id,
+                "type": "result",
+                "success": False,
+                "error": self.fail_all,
+            }
 
         def fail(code, message):
             return {
@@ -1293,7 +1334,12 @@ class FakeWsServer:
             return ok({entry["domain"]: entry["services"] for entry in SERVICES})
         if type_ == "get_states":
             return ok(STATES)
-        return fail("unknown_command", f"Unknown command {type_}")
+        # Home Assistant's own wording, and it names nothing: `connection.py`
+        # sends a fixed `"Unknown command."` and logs the type rather than
+        # returning it. A double that echoed the type back would let a client
+        # pass that reads the command name out of a message that never carries
+        # one.
+        return fail("unknown_command", "Unknown command.")
 
     # -- lifecycle ---------------------------------------------------------
 

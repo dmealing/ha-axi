@@ -12,11 +12,22 @@ from __future__ import annotations
 
 import contextlib
 import json
+import socket
+import ssl
 from dataclasses import dataclass
 from typing import Any
 
 from .config import Config
-from .errors import ApiError, AuthFailed, ConnectionFailed, NotFound, UsageError
+from .errors import (
+    UNAVAILABLE_STATUSES,
+    ApiError,
+    AuthFailed,
+    AxiError,
+    ConnectionFailed,
+    Forbidden,
+    NotFound,
+    UsageError,
+)
 from .output import debug
 from .readonly import READ, WRITE, guard
 
@@ -138,6 +149,39 @@ REGISTRY: dict = {
 }
 
 
+#: Home Assistant's own WebSocket error vocabulary, transcribed from
+#: ``homeassistant/components/websocket_api/const.py`` at 2026.8.3, and mapped
+#: to this tool's codes. Transcribed rather than derived, for the reason the
+#: doubles are: the twelve entries are a fixed published set and a rule that
+#: guessed at them -- uppercasing whatever arrived, as this did -- produces a
+#: vocabulary nobody wrote down and no caller can switch over.
+#:
+#: Two mappings are the point of the exercise:
+#:
+#: - ``unknown_command`` is a **not_found**, and it gets a code of its own.
+#:   Uppercased it became ``UNKNOWN_COMMAND``, which is what `ha-axi` already
+#:   calls a command *this CLI* does not have -- one string for "read `--help`"
+#:   and for "this Home Assistant version has no such command", which are
+#:   opposite next moves.
+#: - ``unauthorized`` is a **permission**, not an auth failure. It can only
+#:   arrive after ``auth_ok``: it is what ``@require_admin`` raises for a
+#:   non-administrator, so the token is valid and a new one changes nothing.
+WS_ERROR_CODES: dict = {
+    "unauthorized": "FORBIDDEN",
+    "unknown_command": "NO_SUCH_WS_COMMAND",
+    "not_found": "NOT_FOUND",
+    "invalid_format": "INVALID_FORMAT",
+    "not_allowed": "NOT_ALLOWED",
+    "not_supported": "NOT_SUPPORTED",
+    "home_assistant_error": "HOME_ASSISTANT_ERROR",
+    "service_validation_error": "SERVICE_VALIDATION_ERROR",
+    "template_error": "TEMPLATE_ERROR",
+    "timeout": "TIMEOUT",
+    "id_reuse": "ID_REUSE",
+    "unknown_error": "API_ERROR",
+}
+
+
 def access_for_type(type_: str) -> str:
     """The read-only classification of one raw API type.
 
@@ -152,6 +196,114 @@ def access_for_type(type_: str) -> str:
         if command.type == type_ and command.access == READ:
             return READ
     return WRITE
+
+
+def _handshake_status(exc) -> int | None:
+    """The HTTP status carried by a refused upgrade, if there is one.
+
+    Read by attribute rather than by catching ``websockets.exceptions``:
+    ``InvalidStatus`` carries ``.response.status_code`` and the ``InvalidStatusCode``
+    it replaced carried ``.status_code``, and this tool declares
+    ``websockets>=13`` rather than pinning it. Duck-typing here means a version
+    bump cannot silently downgrade a classified failure to an unclassified one.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _connect_error(exc: Exception) -> AxiError:
+    """Classify a failure to open the WebSocket, by the same rules REST uses.
+
+    The two transports used to disagree about one fault. ``ssl.SSLError`` and
+    ``socket.timeout`` are both ``OSError`` subclasses, so a certificate this
+    machine will not accept and a host that never answered both arrived as
+    ``WS_UNREACHABLE`` here while REST called them ``TLS_ERROR`` and
+    ``TIMEOUT`` -- an agent that learnt the vocabulary on one transport was
+    wrong on the other, for a fault that has one cause and one fix. The codes
+    are shared now; which transport met the fault is in the message, where it
+    belongs, because it is not what the caller has to change.
+
+    ``WS_HANDSHAKE`` survives as the fault genuinely specific to this
+    transport: the TCP connection was made and the HTTP upgrade was refused,
+    which is what a proxy that does not forward WebSockets does, and the fix is
+    on that proxy rather than on the host or the token.
+    """
+    if isinstance(exc, ssl.SSLError):
+        return ConnectionFailed(
+            f"TLS handshake with Home Assistant failed: {exc}",
+            help_lines=["Confirm HA_URL uses the scheme your instance actually serves"],
+            code="TLS_ERROR",
+        )
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return ConnectionFailed(
+            f"timed out opening a WebSocket to Home Assistant: {exc}",
+            help_lines=["Raise the limit with `ha-axi --timeout 60 <command>`"],
+            code="TIMEOUT",
+        )
+    status = _handshake_status(exc)
+    if status == 401:
+        return AuthFailed(
+            "the WebSocket upgrade was rejected as unauthenticated (HTTP 401)",
+            help_lines=[
+                "Check HA_TOKEN holds a current long-lived access token",
+                "Home Assistant authenticates after the upgrade, so a 401 here is "
+                "usually a proxy in front of it demanding its own credentials",
+            ],
+            code="UNAUTHORIZED",
+        )
+    if status == 403:
+        return Forbidden(
+            "the WebSocket upgrade was refused (HTTP 403): the token was not the problem",
+            help_lines=[
+                "A new token will not help; the upgrade was refused before Home Assistant saw it",
+                "Check whether a proxy in front of Home Assistant, or an IP ban, is refusing it",
+            ],
+            code="FORBIDDEN",
+        )
+    if status == 404:
+        return NotFound(
+            "there is no WebSocket API at this URL (HTTP 404)",
+            help_lines=[
+                "Confirm HA_URL points at the Home Assistant root, not at /api",
+                "Run `ha-axi doctor` to see whether the REST API answers at the same URL",
+            ],
+            code="NO_WEBSOCKET_API",
+        )
+    if status in UNAVAILABLE_STATUSES:
+        return ConnectionFailed(
+            f"Home Assistant is not serving the WebSocket API right now (HTTP {status})",
+            help_lines=[
+                "Retry the command; an instance answers this way while it restarts",
+                "Run `ha-axi doctor` if it keeps answering this way",
+            ],
+            code="UNAVAILABLE",
+        )
+    if status is not None:
+        return ConnectionFailed(
+            f"the WebSocket upgrade was refused with HTTP {status}",
+            help_lines=[
+                "Confirm HA_URL points at the Home Assistant root, not at /api",
+                "Check whether a proxy in front of Home Assistant forwards WebSocket upgrades",
+            ],
+            code="WS_HANDSHAKE",
+        )
+    if isinstance(exc, OSError):
+        return ConnectionFailed(
+            f"could not open a WebSocket to Home Assistant: {exc}",
+            help_lines=[
+                "Check HA_URL points at a reachable Home Assistant instance",
+                "Run `ha-axi doctor` to test both the REST and WebSocket connections",
+            ],
+            code="UNREACHABLE",
+        )
+    return ConnectionFailed(
+        f"WebSocket handshake with Home Assistant failed: {exc}",
+        help_lines=["Confirm HA_URL points at the Home Assistant root, not at /api"],
+        code="WS_HANDSHAKE",
+    )
 
 
 class WsClient:
@@ -195,21 +347,8 @@ class WsClient:
                 close_timeout=self.config.timeout,
                 max_size=MAX_FRAME_BYTES,
             )
-        except (TimeoutError, OSError) as exc:
-            raise ConnectionFailed(
-                f"could not open a WebSocket to Home Assistant: {exc}",
-                help_lines=[
-                    "Check HA_URL points at a reachable Home Assistant instance",
-                    "Run `ha-axi doctor` to test both the REST and WebSocket connections",
-                ],
-                code="WS_UNREACHABLE",
-            ) from None
         except Exception as exc:
-            raise ConnectionFailed(
-                f"WebSocket handshake with Home Assistant failed: {exc}",
-                help_lines=["Confirm HA_URL points at the Home Assistant root, not at /api"],
-                code="WS_HANDSHAKE",
-            ) from None
+            raise _connect_error(exc) from None
         try:
             self._authenticate()
         except Exception:
@@ -338,20 +477,65 @@ class WsClient:
         return self.send_command(command.type, params)
 
     def _command_error(self, type_: str, error: dict):
-        code = str(error.get("code") or "unknown_error")
+        """Classify one refused command, for every WebSocket command there is.
+
+        The classification is by Home Assistant's published error code, mapped
+        through :data:`WS_ERROR_CODES`. A code that table does not name is not
+        passed through: it becomes ``API_ERROR`` and the name Home Assistant
+        used is written into the message, where it is readable without
+        pretending to be a code this tool has ever documented. That is the
+        whole of the difference from what stood here before, and it is the
+        difference between a closed vocabulary and an open one.
+        """
+        reported = str(error.get("code") or "unknown_error")
         message = str(error.get("message") or "the WebSocket API refused the command")
-        if code in ("unauthorized", "invalid_auth"):
-            return AuthFailed(
-                f"the token is not permitted to run {type_}",
-                help_lines=["Check HA_TOKEN belongs to an account with administrator rights"],
-                code="UNAUTHORIZED",
+        code = WS_ERROR_CODES.get(reported)
+
+        if code == "FORBIDDEN":
+            return Forbidden(
+                f"the token is not permitted to run {type_}: {message}",
+                help_lines=[
+                    "Check HA_TOKEN belongs to an account with administrator rights",
+                    "A new token for the same account will not help; the account is the limit",
+                ],
+                code="FORBIDDEN",
             )
-        if code == "not_found":
+        if code == "NO_SUCH_WS_COMMAND":
+            return NotFound(
+                f"this Home Assistant has no WebSocket command `{type_}`",
+                help_lines=[
+                    "Run `ha-axi ws --list` to see the commands this CLI declares",
+                    "A command removed or not yet added upstream answers this way; "
+                    "check the instance version with `ha-axi doctor`",
+                ],
+                code="NO_SUCH_WS_COMMAND",
+            )
+        if code == "NOT_FOUND":
             return NotFound(message, code="NOT_FOUND")
-        if code == "invalid_format":
+        if code == "INVALID_FORMAT":
             return ApiError(
                 f"{type_} rejected the arguments: {message}",
                 help_lines=["Run `ha-axi ws --list` to see each command's parameters"],
                 code="INVALID_FORMAT",
             )
-        return ApiError(f"{type_} failed: {message}", code=code.upper())
+        if code == "TIMEOUT":
+            return ConnectionFailed(
+                f"{type_} timed out inside Home Assistant: {message}",
+                help_lines=["Retry the command; the instance did not finish in time"],
+                code="TIMEOUT",
+            )
+        if code == "ID_REUSE":
+            return ApiError(
+                f"{type_} reused a message id: {message}",
+                help_lines=[
+                    "This is a bug in ha-axi; the connection cannot be reused after it",
+                    "Report it at https://github.com/dmealing/ha-axi/issues",
+                ],
+                code="ID_REUSE",
+            )
+        if code is not None:
+            return ApiError(f"{type_} failed: {message}", code=code)
+        return ApiError(
+            f"{type_} failed with an error Home Assistant named `{reported}`: {message}",
+            code="API_ERROR",
+        )
