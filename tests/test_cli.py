@@ -12,7 +12,7 @@ def test_no_arguments_shows_live_state_not_a_manual(run_cli, rest_env):
     code, out = run_cli([], rest_env)
     assert code == 0
     assert out.startswith("bin: ")
-    assert "description: Agent ergonomic wrapper" in out
+    assert "description: Agent CLI for Home Assistant." in out
     assert "entities: 11 in 7 domains" in out
     assert "domains[7]{domain,entities}:" in out
     assert "help[" in out

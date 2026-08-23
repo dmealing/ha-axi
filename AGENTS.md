@@ -458,6 +458,54 @@ that is wrong. Either read the model live at the moment you enforce it — as `s
 schema. This is also why the model is never cached: an integration added or removed rewrites it and
 nothing signals when.
 
+## What the README leads with, and why it is not a feature list
+
+**The two things the tool is for are the registries and service-call judgement, and the README says
+so before it says anything else.** `state`, `template`, `api` and `ws` are documented — they are
+useful, they are load-bearing for the other two, and an agent that cannot find them will go looking
+for `curl` — but they are *not* pitched, because every Home Assistant client has them and several
+have them more thoroughly. A reader who judges this tool on them has no reason to pick it.
+
+That ordering is a measured conclusion rather than a taste. A head-to-head against a comparable CLI
+on a real installation found three **wrong answers at exit 0** on exactly the registry questions
+this tool is built to get right — a device-inherited area invisible to the discoverable area
+filter, a safety mode that did not hold on the transport where registry writes live, and a service
+call that reached nothing reported as a success — plus no typed entity-registry write at all. Those
+are the differentiators, and they are the ones that survived contact with a server. An earlier
+README opened on "token-efficient structured output, discoverable subcommands, useful `--help`, no
+interactive prompts, and a non-zero exit on every failure", a list on which the comparison scores at
+least as well line by line, and buried the registry story in paragraph three. **Do not restore a
+feature list to the top**, and do not promote `state`/`template`/`api`/`ws` back into the pitch; the
+capability list further down is where they belong.
+
+**Every `$ ha-axi …` block in the README is real output, and re-running them is part of editing
+them.** An example that does not run is a defect. They are checked by running each block against a
+throwaway Home Assistant in the order a reader meets them, from a known starting state, because the
+blocks mutate the installation: the first one places `light.example_lamp` in `Example Room`, and
+`area list` further down prints the counts that write produced. Two consequences:
+
+- **The lab has to be shaped to the repository's synthetic vocabulary before anything is pasted.**
+  Real output carries whatever names the installation has, and this repository may not carry an
+  installation's names. Build the lab from the recipe under "Build, test, lint" and then *make* it
+  say `light.example_lamp`, `cover.example_blind`, `Example Room`: modern `template:` entities with
+  a `unique_id` (without one there is no registry entry to update at all, and the legacy
+  `light: - platform: template` form is refused outright by current Home Assistant), and
+  `entity update --new-id` plus `ws device.update --param name_by_user=…` for anything a core
+  integration named. A template cover with only `open_cover`/`close_cover` publishes
+  `supported_features: 3`, which is what makes the `cover.set_cover_position` capability refusal
+  reproducible; an empty area is what makes `NO_ENTITIES_TARGETED` reproducible.
+- **One line in the README is not reproducible and is the documentation placeholder instead**: the
+  home view's `url:`, which is the reader's own base URL. The `bin:` line above it *is* real —
+  `executable_path()` collapses `$HOME`, so running the console script from a throwaway `HOME`
+  whose `.local/bin` holds the shim prints `~/.local/bin/ha-axi` exactly as a `--user` install does.
+  Nothing else is substituted, and nothing else should be.
+
+**A comma in `home.DESCRIPTION` costs a pair of quotes on every session start.** The home view is
+TOON, so a scalar containing the delimiter is quoted — the description is printed by `setup hooks`
+into every agent session, and `description: "…"` there is noise for no gain. Write it without
+commas. The same string is the root `--help` description line and the `SKILL.md` body, neither of
+which quotes, so the constraint comes from the one reader that does.
+
 ## Build, test, lint
 
 ```sh
