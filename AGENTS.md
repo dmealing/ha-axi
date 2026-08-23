@@ -462,7 +462,7 @@ nothing signals when.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~590 tests, a couple of seconds
+pytest                                   # ~880 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
