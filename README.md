@@ -2,11 +2,12 @@
 
 An Agent eXperience Interface (AXI) CLI for Home Assistant.
 
-Home Assistant's REST API will happily tell you a lamp is off. It will not tell you what that lamp
-is called, which room it is in, or whether that room came from the entity or from the device behind
-it — and it cannot change any of them. **The entity, area and device registries are reachable only
-over the WebSocket API**, so administering an installation from a script means hand-rolling a
-WebSocket client, or clicking through the UI instead.
+Home Assistant's REST API will happily tell you a lamp is off, and even the name it displays. It
+will not tell you where that name came from, which room the lamp is in, or whether that room came
+from the entity or from the device behind it — and it cannot change any of them. **The entity,
+area and device registries are reachable only over the WebSocket API**, so administering an
+installation from a script means hand-rolling a WebSocket client, or clicking through the UI
+instead.
 
 That is the first of the two jobs `ha-axi` exists for. The second is getting a service call *right*
 — checked before it is sent, and explained when Home Assistant refuses it with a status code and no
@@ -196,7 +197,7 @@ help[2]:
   Run `ha-axi service get light.turn_on` for their types and which are required
 ```
 
-A call that succeeds pays for none of that; the model is read on the failure path only. It is also
+A call that succeeds pays for none of that: the explanation is failure-path only. The model is
 never cached — an integration added or removed rewrites it, and nothing signals when.
 
 `service get` renders the same model on demand, from the installation itself, so it is never stale
@@ -394,10 +395,10 @@ configuration present.
 
 ### `state` and `entity` are different views, and both are needed
 
-`state` is the runtime view over REST — what an entity is doing. `entity` is the registry view over
-WebSocket — an entity's stable identity: the name a user set, the area it belongs to, the
-integration that supplied it. Names and areas exist only in the registry; states exist only over
-REST.
+`state` is the runtime view over REST — what an entity is doing, and the name it displays. `entity`
+is the registry view over WebSocket — an entity's stable identity: the name a user set, the area it
+belongs to, the integration that supplied it. All of those live only in the registry; states live
+only over REST.
 
 `--area` works the same on `state list`, `entity list` and `device list`. On `state list` it costs
 one extra registry round-trip, because areas live over the WebSocket, and it is paid only when the
