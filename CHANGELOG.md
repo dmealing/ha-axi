@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/dmealing/ha-axi/compare/v0.4.0...v0.5.0) (2026-08-23)
+
+
+### Features
+
+* **errors:** a closed error vocabulary, classified at the transport ([e4200c6](https://github.com/dmealing/ha-axi/commit/e4200c65981c37373de16b3c52de3bdf30d774a5))
+
+
+### Documentation
+
+* lead with the registries and service-call judgement, not the commodity half ([5dbf68e](https://github.com/dmealing/ha-axi/commit/5dbf68e77848a6f78d2ee7fd6ec804820617b755))
+
 ## [0.4.0](https://github.com/dmealing/ha-axi/compare/v0.3.4...v0.4.0) (2026-08-23)
 
 
