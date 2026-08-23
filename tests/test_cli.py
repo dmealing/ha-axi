@@ -204,9 +204,15 @@ def test_doctor_fails_the_leg_that_cannot_connect(run_cli, rest_env):
 
 
 def test_doctor_reports_a_missing_environment_and_exits_non_zero(run_cli):
+    # The failing row carries a code and class the passing read-only row does
+    # not, so the checks render in list form rather than tabular -- the same
+    # consequence a failed transport check already has.
     code, out = run_cli(["doctor"], {})
     assert code == 1
-    assert "environment,fail,HA_URL and HA_TOKEN not set" in out
+    assert "check: environment\n    status: fail" in out
+    assert "code: NOT_CONFIGURED" in out
+    assert "class: config" in out
+    assert "detail: HA_URL and HA_TOKEN not set" in out
     assert "healthy: false" in out
 
 

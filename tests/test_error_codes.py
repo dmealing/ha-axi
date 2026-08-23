@@ -549,6 +549,7 @@ FAULTS = {
     AUTH: "a token neither transport accepts",
     PERMISSION: "403 from the ban middleware, `unauthorized` from require_admin",
     NOT_FOUND: "nothing routed under /api, `unknown_command` over the WebSocket",
+    REFUSED: "a bodyless 500, `home_assistant_error` over the WebSocket",
     TRANSPORT: "nothing listening on the port",
 }
 
@@ -563,6 +564,10 @@ def _apply(fault, rest_server, ws_server, env, closed_port):
     if fault == NOT_FOUND:
         rest_server.unrouted = True
         ws_server.fail_all = {"code": "unknown_command", "message": "Unknown command."}
+        return env
+    if fault == REFUSED:
+        rest_server.status_override = (500, b"")
+        ws_server.fail_all = {"code": "home_assistant_error", "message": "Home Assistant error"}
         return env
     return {**env, "HA_URL": f"http://127.0.0.1:{closed_port}"}
 
@@ -631,6 +636,20 @@ def test_doctor_still_answers_healthy_in_tabular_form(run_cli, installation_env)
     assert code == 0
     assert "rest,ok" in out
     assert "class:" not in out
+
+
+def test_doctor_codes_a_missing_environment(run_cli):
+    """A failing check that never reaches a transport is coded like any other.
+
+    `home` answers an unset HA_URL with `NOT_CONFIGURED`; folding the identical
+    condition into a prose-only check row was the one remaining failing check a
+    caller could not switch on -- and reachable on the most common
+    misconfiguration there is.
+    """
+    code, out = run_cli(["doctor"], {})
+    assert code == 1
+    assert "code: NOT_CONFIGURED" in out
+    assert f"class: {CONFIG}" in out
 
 
 def test_the_home_view_carries_a_code_like_every_other_command(run_cli, rest_env, rest_server):
