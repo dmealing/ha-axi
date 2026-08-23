@@ -6,6 +6,7 @@ from ..argspec import Command, Sub
 from ..config import describe_environment, missing_env_vars, setup_help
 from ..errors import AxiError
 from ..output import HelpBlock
+from ..readonly import READ
 from ._common import plural
 
 COMMAND = Command(
@@ -13,7 +14,7 @@ COMMAND = Command(
     summary="Check the environment, the REST API and the WebSocket API",
     usage="usage: ha-axi doctor",
     default_sub="doctor",
-    subs=(Sub(name="doctor", summary="Run every connection check"),),
+    subs=(Sub(name="doctor", summary="Run every connection check", access=READ),),
     notes=("exits non-zero when any check fails, so it works as a CI or hook gate",),
     examples=("ha-axi doctor",),
 )
@@ -21,8 +22,22 @@ COMMAND = Command(
 
 def run(ctx, sub: str, parsed):
     env = describe_environment(ctx.environ)
-    checks = []
     healthy = True
+
+    # First, because it is the one check that needs no configuration and no
+    # connection -- and because a session that cannot write is the first thing
+    # to know when a write has just been refused.
+    checks = [
+        {
+            "check": "read_only",
+            "status": "ok",
+            "detail": (
+                f"{env['read_only_var']} is set: every write is refused"
+                if env["read_only"]
+                else f"{env['read_only_var']} is not set: writes are allowed"
+            ),
+        }
+    ]
 
     missing = missing_env_vars(ctx.environ)
     if missing:

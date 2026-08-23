@@ -16,6 +16,7 @@ from .. import servicemodel as model
 from ..argspec import Command, Flag, Sub
 from ..errors import ApiError, AxiError, NotFound, UsageError
 from ..output import HelpBlock, truncate
+from ..readonly import READ, WRITE
 from ._common import (
     device_area_map,
     domain_of,
@@ -42,11 +43,13 @@ COMMAND = Command(
     subs=(
         Sub(
             name="list",
+            access=READ,
             summary="List service domains, or the services in one domain",
             flags=(Flag("--domain", "<name>", note="show the services in one domain"),),
         ),
         Sub(
             name="get",
+            access=READ,
             args=("<domain.service>",),
             summary="Show one service's fields, target and response mode, read live",
             flags=(
@@ -56,6 +59,12 @@ COMMAND = Command(
         ),
         Sub(
             name="call",
+            # Every service call is a write, including one that only asks for a
+            # response: `weather.get_forecasts` reads, `conversation.process`
+            # can turn the house upside down, and nothing Home Assistant
+            # publishes tells the two apart. The safe half of that ignorance is
+            # to refuse both.
+            access=WRITE,
             args=("<domain.service>",),
             summary="Call a service",
             flags=(

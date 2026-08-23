@@ -8,6 +8,7 @@ from pathlib import Path
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ..output import HelpBlock, truncate
+from ..readonly import READ
 from ._common import PREVIEW_CHARS
 
 COMMAND = Command(
@@ -18,6 +19,10 @@ COMMAND = Command(
     subs=(
         Sub(
             name="render",
+            # A POST, and still a read: the template sandbox cannot call a
+            # service or set a state, which is why `rest.READ_ONLY_POSTS` names
+            # the path rather than the transport guessing from the verb.
+            access=READ,
             summary="Render a template and print the result",
             flags=(
                 Flag("--template", "<text>"),

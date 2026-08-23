@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ..output import HelpBlock
+from ..readonly import READ, WRITE
 from ._common import (
     area_is_placed,
     device_area_map,
@@ -19,10 +20,13 @@ COMMAND = Command(
     summary="Read and update the area registry over the WebSocket API",
     usage="usage: ha-axi area <subcommand> [flags]",
     subs=(
-        Sub(name="list", summary="List areas with their entity counts"),
-        Sub(name="get", args=("<id|name>",), summary="Show one area and what it holds"),
+        Sub(name="list", summary="List areas with their entity counts", access=READ),
+        Sub(
+            name="get", args=("<id|name>",), summary="Show one area and what it holds", access=READ
+        ),
         Sub(
             name="create",
+            access=WRITE,
             summary="Create an area",
             flags=(
                 Flag("--name", "<text>", note="required"),
@@ -32,6 +36,7 @@ COMMAND = Command(
         ),
         Sub(
             name="update",
+            access=WRITE,
             args=("<id|name>",),
             summary="Rename an area or change its icon or floor",
             flags=(

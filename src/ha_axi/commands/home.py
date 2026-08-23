@@ -10,6 +10,8 @@ from ..argspec import Command, Sub
 from ..config import missing_env_vars, setup_help
 from ..errors import AxiError
 from ..output import HelpBlock
+from ..readonly import ENV_VAR as READ_ONLY_VAR
+from ..readonly import READ
 from ._common import domain_of
 
 DESCRIPTION = (
@@ -22,7 +24,7 @@ COMMAND = Command(
     summary="Show the current installation at a glance",
     usage="usage: ha-axi",
     default_sub="home",
-    subs=(Sub(name="home", summary="Show connection status and a state summary"),),
+    subs=(Sub(name="home", summary="Show connection status and a state summary", access=READ),),
     examples=("ha-axi",),
 )
 
@@ -56,6 +58,12 @@ def run(ctx, sub: str, parsed):
 
     config = ctx.config()
     doc["url"] = config.base_url
+    # Announced only when it is on. This view loads at the start of every agent
+    # session, so an unset switch is not worth the tokens -- but an agent that
+    # cannot see a set one plans writes it will never be allowed to make, and
+    # reads the refusals as a broken installation.
+    if config.read_only:
+        doc["read_only"] = "on"
 
     try:
         states = ctx.rest().states()
@@ -101,8 +109,13 @@ def run(ctx, sub: str, parsed):
         [
             "Run `ha-axi entity list --area <id|name>` to read the registry, which REST cannot reach",
             "Run `ha-axi area list` to see the areas defined here",
-            "Run `ha-axi service call <domain>.<service> --target-entity <entity_id>` to act",
         ]
     )
+    if config.read_only:
+        help_lines.append(f"This session is read-only; unset {READ_ONLY_VAR} to allow writes")
+    else:
+        help_lines.append(
+            "Run `ha-axi service call <domain>.<service> --target-entity <entity_id>` to act"
+        )
     doc["help"] = HelpBlock(help_lines)
     return doc

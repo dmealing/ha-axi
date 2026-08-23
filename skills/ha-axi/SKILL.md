@@ -20,6 +20,22 @@ export HA_TOKEN=<long-lived access token>          # or HASS_TOKEN
 Create the token on the Home Assistant profile page, under Security.
 Run `ha-axi doctor` to confirm both transports work; it exits non-zero when they do not.
 
+## Read-only sessions
+
+A third variable makes the session incapable of changing anything. `HA_AXI_READ_ONLY` is a
+switch rather than a boolean: **any** non-empty value enables it, `0` and `false` included,
+and unsetting it is how writes are allowed again.
+
+```sh
+export HA_AXI_READ_ONLY=1
+```
+
+Every write is then refused before it is sent, over REST and over the WebSocket alike,
+with `code: READ_ONLY` and exit 2. The commands stay visible in `--help` and in the
+command table, so a plan that needs one can be recognised as impossible rather than
+mysterious. `ha-axi doctor` reports the mode, and the no-argument view shows
+`read_only: on` when it is set.
+
 ## Running without a global install
 
 ```sh

@@ -10,6 +10,7 @@ from __future__ import annotations
 from ..argspec import Command, Flag, Sub
 from ..errors import NotFound, UsageError
 from ..output import HelpBlock
+from ..readonly import READ, WRITE
 from ._common import (
     area_is_placed,
     area_name_map,
@@ -52,6 +53,7 @@ COMMAND = Command(
     subs=(
         Sub(
             name="list",
+            access=READ,
             summary="List entity registry entries",
             flags=(
                 Flag("--area", "<id|name>", note="'none' selects unassigned entities"),
@@ -67,9 +69,10 @@ COMMAND = Command(
                 Flag("--fields", "<a,b,c>", note=f"from {'|'.join(LIST_FIELDS)}"),
             ),
         ),
-        Sub(name="get", args=("<entity_id>",), summary="Show one registry entry"),
+        Sub(name="get", args=("<entity_id>",), summary="Show one registry entry", access=READ),
         Sub(
             name="update",
+            access=WRITE,
             args=("<entity_id>",),
             summary="Set an entity's name, area or icon",
             flags=(

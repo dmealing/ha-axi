@@ -18,6 +18,7 @@ from typing import Any
 from .config import Config
 from .errors import ApiError, AuthFailed, ConnectionFailed, NotFound, UsageError
 from .output import debug
+from .readonly import READ, WRITE, guard
 
 #: Cap on a single frame. Registry payloads on large installations comfortably
 #: exceed the library default of 1 MiB.
@@ -26,35 +27,57 @@ MAX_FRAME_BYTES = 32 * 1024 * 1024
 
 @dataclass(frozen=True)
 class WsCommand:
-    """One WebSocket command, declared once and reused by every caller."""
+    """One WebSocket command, declared once and reused by every caller.
+
+    ``access`` is the read-only classification, and it defaults to ``None`` for
+    the same reason :class:`ha_axi.argspec.Sub` does: an unclassified command
+    is refused rather than sent, and the sweep in ``tests/test_read_only.py``
+    fails on the absence. ``DYNAMIC`` has no meaning here -- the type is fixed
+    by the declaration, so no argument is left to decide anything.
+    """
 
     name: str
     type: str
     summary: str
     required: tuple = ()
     optional: tuple = ()
+    access: str | None = None
 
     @property
     def params(self) -> tuple:
         return self.required + self.optional
 
 
-def _cmd(name, type_, summary, required=(), optional=()) -> WsCommand:
-    return WsCommand(name=name, type=type_, summary=summary, required=required, optional=optional)
+def _cmd(name, type_, summary, required=(), optional=(), access=None) -> WsCommand:
+    return WsCommand(
+        name=name,
+        type=type_,
+        summary=summary,
+        required=required,
+        optional=optional,
+        access=access,
+    )
 
 
 #: The command table. Every registry operation the CLI exposes routes through
 #: here, and so does `ha-axi ws <name>`, which is what makes the surface
 #: extensible without touching the transport.
+#:
+#: Every entry classifies itself for the read-only gate. The classification is
+#: deliberate, not derived from the command's name or from the shape of its
+#: type: nothing in `config/entity_registry/update` is structurally different
+#: from `config/entity_registry/list`, and a rule that read one from the other
+#: would be a rule about spelling.
 REGISTRY: dict = {
     c.name: c
     for c in (
-        _cmd("entity.list", "config/entity_registry/list", "Read the entity registry"),
+        _cmd("entity.list", "config/entity_registry/list", "Read the entity registry", access=READ),
         _cmd(
             "entity.get",
             "config/entity_registry/get",
             "Read one entity registry entry",
             required=("entity_id",),
+            access=READ,
         ),
         _cmd(
             "entity.update",
@@ -71,14 +94,16 @@ REGISTRY: dict = {
                 "labels",
                 "aliases",
             ),
+            access=WRITE,
         ),
-        _cmd("area.list", "config/area_registry/list", "Read the area registry"),
+        _cmd("area.list", "config/area_registry/list", "Read the area registry", access=READ),
         _cmd(
             "area.create",
             "config/area_registry/create",
             "Create an area",
             required=("name",),
             optional=("icon", "floor_id", "aliases", "labels", "picture"),
+            access=WRITE,
         ),
         _cmd(
             "area.update",
@@ -86,28 +111,47 @@ REGISTRY: dict = {
             "Update an area",
             required=("area_id",),
             optional=("name", "icon", "floor_id", "aliases", "labels", "picture"),
+            access=WRITE,
         ),
         _cmd(
             "area.delete",
             "config/area_registry/delete",
             "Delete an area",
             required=("area_id",),
+            access=WRITE,
         ),
-        _cmd("device.list", "config/device_registry/list", "Read the device registry"),
+        _cmd("device.list", "config/device_registry/list", "Read the device registry", access=READ),
         _cmd(
             "device.update",
             "config/device_registry/update",
             "Update a device registry entry",
             required=("device_id",),
             optional=("name_by_user", "area_id", "disabled_by", "labels"),
+            access=WRITE,
         ),
-        _cmd("floor.list", "config/floor_registry/list", "Read the floor registry"),
-        _cmd("label.list", "config/label_registry/list", "Read the label registry"),
-        _cmd("config.get", "get_config", "Read the instance configuration"),
-        _cmd("service.list", "get_services", "Read every registered service"),
-        _cmd("state.list", "get_states", "Read every entity state"),
+        _cmd("floor.list", "config/floor_registry/list", "Read the floor registry", access=READ),
+        _cmd("label.list", "config/label_registry/list", "Read the label registry", access=READ),
+        _cmd("config.get", "get_config", "Read the instance configuration", access=READ),
+        _cmd("service.list", "get_services", "Read every registered service", access=READ),
+        _cmd("state.list", "get_states", "Read every entity state", access=READ),
     )
 }
+
+
+def access_for_type(type_: str) -> str:
+    """The read-only classification of one raw API type.
+
+    Read from :data:`REGISTRY` at the moment it is asked rather than from a map
+    built at import, so a command added to the table -- by a later release or by
+    a test proving the fail-closed default -- is classified by the same rule as
+    every other. A type no declaration names is a write: `ws --raw` hands an
+    arbitrary string to the API, and the safe reading of an unknown one is that
+    it changes something.
+    """
+    for command in REGISTRY.values():
+        if command.type == type_ and command.access == READ:
+            return READ
+    return WRITE
 
 
 class WsClient:
@@ -247,7 +291,15 @@ class WsClient:
     # -------------------------------------------------------------- commands
 
     def send_command(self, type_: str, params: dict | None = None) -> Any:
-        """Send one command and return its ``result``, translating failures."""
+        """Send one command and return its ``result``, translating failures.
+
+        The read-only gate is applied here, ahead of the connection, because
+        this is the one place every WebSocket command passes through: a command
+        added later is guarded whether or not its author knew there was a gate.
+        Refusing before :meth:`connect` also keeps the token off the wire for a
+        write that was never going to be sent.
+        """
+        guard(self.config.read_only, access_for_type(type_), type_)
         if self._socket is None:
             self.connect()
         message_id = self._next_id

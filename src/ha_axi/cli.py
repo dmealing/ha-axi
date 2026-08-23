@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import sys
 
-from . import __version__, output
+from . import __version__, output, readonly
 from . import config as config_module
-from .argspec import GLOBAL_FLAGS, Command, parse, render_command_help
+from .argspec import GLOBAL_FLAGS, Command, invocation, parse, render_command_help
 from .commands import api as api_command
 from .commands import area as area_command
 from .commands import device as device_command
@@ -115,9 +115,10 @@ def render_root_help() -> str:
         "flags[6]:",
         "  --human (readable output), --json (raw JSON output), --timeout <seconds> (default 30),",
         "  --debug (diagnostics on stderr), --help, -v/--version",
-        "env[2]:",
+        "env[3]:",
         "  HA_URL (or HASS_SERVER) - Home Assistant base URL, e.g. https://homeassistant.example.com",
         "  HA_TOKEN (or HASS_TOKEN) - long-lived access token; there is deliberately no --token flag",
+        f"  {readonly.ENV_VAR} - set to any non-empty value to refuse every write, on both transports",
         f"summaries[{len(COMMAND_ORDER)}]:",
     ]
     width = max(len(name) for name in COMMAND_ORDER)
@@ -298,6 +299,29 @@ def _pick_sub(command: Command, argv: list) -> tuple:
     )
 
 
+def _access(module, sub, parsed) -> str:
+    """The read-only verdict for one resolved invocation.
+
+    The first of the three enforcement points, and the specific one: it names
+    the command, and it runs before any transport is built, so a refused write
+    reaches neither the network nor the credential loader. The transports guard
+    themselves as well -- see :func:`ha_axi.rest.access_for_request` and
+    :func:`ha_axi.ws.access_for_type` -- because this gate can only judge what
+    the declaration says, and the two escape hatches carry their subject in
+    their arguments.
+
+    Everything unclassified is a write. ``DYNAMIC`` delegates to the owning
+    module's ``access()``; a module that declares ``DYNAMIC`` and supplies none
+    is unclassified in a costume, and is treated as one.
+    """
+    if sub.access != readonly.DYNAMIC:
+        return readonly.verdict(sub.access)
+    resolver = getattr(module, "access", None)
+    if not callable(resolver):
+        return readonly.WRITE
+    return readonly.verdict(resolver(sub.name, parsed))
+
+
 def _error_document(exc: AxiError) -> dict:
     doc: dict = {"error": exc.message}
     if exc.code:
@@ -327,7 +351,8 @@ def main(argv: list | None = None, *, environ=None) -> int:
             if globals_.get("help") or globals_.get("h"):
                 output.write_text(render_root_help())
                 return EXIT_OK
-            command, sub_name, sub_argv = home_command.COMMAND, "home", []
+            command = home_command.COMMAND
+            sub, sub_name, sub_argv = command.subs[0], "home", []
         else:
             name = rest[0]
             module = _MODULES.get(name)
@@ -356,6 +381,10 @@ def main(argv: list | None = None, *, environ=None) -> int:
 
         if globals_.get("debug"):
             output.set_debug(True)
+
+        readonly.guard(
+            readonly.enabled(environ), _access(module, sub, parsed), invocation(command, sub)
+        )
 
         ctx = Context(environ, mode=mode, timeout=_resolve_timeout(globals_.get("timeout")))
         doc = module.run(ctx, sub_name, parsed)

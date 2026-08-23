@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..argspec import Command, Flag, Sub
 from ..output import HelpBlock
+from ..readonly import READ
 from ._common import (
     area_name_map,
     count_line,
@@ -35,6 +36,7 @@ COMMAND = Command(
     subs=(
         Sub(
             name="list",
+            access=READ,
             summary="List devices with their areas and entity counts",
             flags=(
                 Flag("--area", "<id|name>", note="'none' selects unassigned devices"),

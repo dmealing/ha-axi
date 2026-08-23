@@ -118,13 +118,18 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   the only runtime dependency.
 - `argspec.py` — per-subcommand flag declarations. Unknown flags are rejected by name with the
   valid ones inlined; `RENAMED` maps plausible wrong guesses to the real flag.
-- `commands/` — one module per noun, each exposing `COMMAND` and `run(ctx, sub, parsed)`. Adding a
-  noun is one new file plus two lines in `cli.py` (`COMMAND_ORDER` and `_MODULES`); root help,
-  `SKILL.md` and the parametrised test sweeps all derive from those. A `pkgutil` scan would save
+- `commands/` — one module per noun, each exposing `COMMAND` and `run(ctx, sub, parsed)`, and
+  `access(sub, parsed)` as well if any of its subcommands is `DYNAMIC`. Every `Sub` declares
+  `access`; one that does not is refused under `HA_AXI_READ_ONLY` and fails the completeness sweep.
+  Adding a noun is one new file plus two lines in `cli.py` (`COMMAND_ORDER` and `_MODULES`); root
+  help, `SKILL.md` and the parametrised test sweeps all derive from those. A `pkgutil` scan would save
   the two lines, cost static analysis, and still need an explicit order — it has been costed and
   is not worth it.
 - `servicemodel.py` — a pure reader for what `GET /api/services` publishes. No I/O and no cache:
   the caller fetches, and decides whether the answer is worth the round-trip.
+- `readonly.py` — the `HA_AXI_READ_ONLY` gate: the classification vocabulary, the switch reader,
+  the refusal, and the one `guard()` all three enforcement points call. It imports nothing but
+  `errors`, so `config`, `rest`, `ws` and `cli` can all depend on it without a cycle.
 
 ### Security invariants — do not regress these
 
@@ -142,6 +147,9 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 - **URL userinfo is stripped in `normalize_base_url` and registered as a secret.** The no-argument
   home view prints the base URL, and `setup hooks` runs that view into every agent session.
 - **A bare host defaults to `https://`**, never `http://`.
+- **`HA_AXI_READ_ONLY` holds at three points, and the two transports are the load-bearing ones.**
+  See "The read-only gate" below. Do not move enforcement into command bodies, do not add a
+  fourth classification, and do not make the switch parse its value.
 - Tests for all of this live in `tests/test_credentials.py`, which asserts `capsys` **stderr** is
   clean — the assertion that was missing when two escapes shipped.
 
@@ -227,7 +235,11 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   so a client that only agrees with itself cannot pass.
 - **Exit codes follow one rule.** A static invocation problem — unknown flag, unknown subcommand,
   unknown WebSocket command name — exits 2. An outcome of a lookup against live state — no such
-  area, an ambiguous area name — exits 1. Put a new error on the right side of that line.
+  area, an ambiguous area name — exits 1. Put a new error on the right side of that line. A
+  read-only refusal is a 2 by that same rule and not by a new one: it is decided without touching
+  the installation, and no argument to the same command changes the verdict. It is `AuthFailed`
+  that shows why the line is drawn where it is — a 401 is exit 1, because only the server could
+  have said it.
 - **`--help` obeys value consumption.** `_help_requested` skips the value of any declared
   value-taking flag, so `template render --template --help` renders the literal.
 - **Home Assistant refuses a service call with an *empty* 400.** `APIDomainServicesView.post`
@@ -293,6 +305,93 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   which the REST-only path cannot supply. If that read fails, the report says so and the exit code
   stays 0: the call itself was accepted, and turning it into an error would be a fresh untruth.
 
+## The read-only gate
+
+`HA_AXI_READ_ONLY` makes a session incapable of changing anything. The design is written down here
+because a guard that covers most of the write paths is **worse than no guard** — it converts an
+understood risk into a false assurance about the paths it missed, and the operator who sets it is
+the one who finds out. The comparable upstream CLI ships a read-only flag covering part of its
+surface; that is the failure this is built not to repeat.
+
+**It is a variable and never a flag, and it is a switch and never a boolean.** A flag is omitted by
+exactly the caller that most needs it — an agent composing a command line does not know the
+operator wanted a safe session. `readonly.enabled` treats any value that is set and not blank as on,
+`0` and `false` included, and blank as unset, matching how `config._first_env` reads everything
+else. Do not teach it to parse the value: one unrecognised spelling or one case that was not folded
+is a guard that is off while an operator believes it is on, and being wrong in that direction is
+the only outcome that is not survivable. Being wrong in the other direction — `HA_AXI_READ_ONLY=false`
+refusing a write — is loud, immediate and fixed by unsetting the variable.
+
+**Every subcommand and every WebSocket command carries an explicit classification, and the default
+is a write.** `Sub.access` and `WsCommand.access` both default to `None`, which is an *absence*
+rather than a value: `readonly.verdict` reads anything that is not exactly `READ` as a write, so
+forgetting refuses rather than mutating, and `tests/test_read_only.py` enumerates both tables from
+`cli._MODULES` and `ws.REGISTRY` and fails on the first declaration that has none. That sweep is
+the deliverable — the guard is whole because of it, not because anybody remembered every command.
+Nothing is inferred from a name or an HTTP verb: `service call` mutates through a surface that
+looks like any other POST, `template render` is a POST that changes nothing, and the WebSocket
+command set does not follow REST conventions at all.
+
+**`DYNAMIC` is a fourth answer, not a hole.** Three subcommands carry their subject in their
+arguments rather than in their declaration — `api`, `ws` and `setup skill` — so they declare
+`DYNAMIC` and their module exposes `access(sub, parsed)`. A module that declares `DYNAMIC` and
+supplies no resolver is unclassified in a costume and `cli._access` treats it as a write; a test
+asserts every `DYNAMIC` sub has one. `wscmd` resolves the *type* through the same `_resolve` that
+`run` dispatches on, deliberately: two readings of the same arguments are how a gate comes to guard
+a different command from the one that runs.
+
+**There are three enforcement points and the last two are the ones that make it hold.**
+
+| point | what it knows | why it exists |
+| --- | --- | --- |
+| `cli.main` → `cli._access` | the declaration and the parsed arguments | names the command, refuses before any transport or even `config.load` runs |
+| `rest.RestClient.request` | the method and the resolved path | every REST call passes through it |
+| `ws.WsClient.send_command` | the API type | every WebSocket command passes through it, and it refuses *before* `connect()` |
+
+Enforcement is at dispatch, **never in a command body**: a new command is guarded whether or not
+its author knew there was a gate. The transports are not belt-and-braces either — a classification
+is a claim a module makes about itself, and `test_a_command_classified_read_still_cannot_write`
+pins that a module claiming `READ` and posting anyway is still refused. A guard on one transport
+only is the partial guard above, so both refuse of their own accord.
+
+**Where a verb *is* read, and why that is not a contradiction.** `ha-axi api` hands an opaque path
+straight to the installation, so the method is the only fact the caller supplied.
+`rest.access_for_request` errs closed on it: `SAFE_METHODS` pass, everything else is a write —
+including a POST that happens not to change anything. `READ_ONLY_POSTS` names the single exception,
+`/api/template`, because Home Assistant's template sandbox cannot call a service or set a state and
+refusing the tool's most useful read by its own verb would be a guard nobody keeps switched on. The
+residual risk is stated in the README rather than hidden: a Home Assistant endpoint that mutated on
+a GET would pass, and none does. `ws --raw` is judged by `ws.access_for_type`, which scans
+`REGISTRY` live rather than a map built at import — so a command added by a later release, or by a
+test proving the fail-closed default, is classified by the same rule as every other, and a type no
+declaration names is a write.
+
+**`setup` writes to this machine rather than to Home Assistant, and counts as a write anyway.** The
+variable says this tool does not write; splitting that into "not your house" and "not your
+dotfiles" is a distinction nobody asked for. `setup skill --check` is the read half, which is what
+`DYNAMIC` buys there.
+
+**Refused commands stay visible, and that is the opposite of the sibling project's playback gate —
+deliberately.** There the capability was hidden from help and from the command table, because a
+second tool offered the same capability and an agent that could see both could pick the wrong one;
+invisibility was the point. Nothing else here reaches Home Assistant, so there is no wrong tool to
+pick, and an agent that cannot see `entity update` cannot work out why its plan is impossible — it
+reads a missing command as a missing feature and starts inventing routes around it. Visible and
+refused is right for this gate; hidden is right for that one. The two are not an inconsistency, and
+this paragraph exists so nobody "fixes" one to match the other.
+
+**The refusal carries its own code.** `READ_ONLY`, exit 2, distinct from `UNAUTHORIZED` and from
+every transport failure, because "this session forbids writes" and "that server refused you" have
+different fixes and an agent that cannot tell them apart retries the wrong one. `doctor` reports the
+mode as its first check — the only check needing neither configuration nor a connection — and the
+home view prints `read_only: on` when it is set and stays silent when it is not, because that view
+loads at the start of every session and an unset switch is not worth the tokens.
+
+**Verified against a live installation, not only against the doubles.** Both transports were
+refused live and both worked again with the variable unset; the area registry was counted before
+and after to prove the refused create reached nothing. The recipe is the one in "Build, test, lint"
+below — credentials fetched per command, never stored — and the suite itself stays offline.
+
 ## The command contract
 
 `ha-axi` reaches every service through `service call` and every WebSocket type through `ws --raw`.
@@ -343,6 +442,9 @@ fields with no prose, so the emptiness is visible in the suite rather than being
 the default is a judgement about what an agent most needs to see, not a defect, and it belongs in its
 own change with its own argument.
 
+**And whichever way that goes, the new subcommand declares `access`.** It is not optional and it is
+not inferable; see "The read-only gate" above.
+
 **Demotion, and the standing cap.** If a typed command's body reduces to flag-mapping plus a
 request, delete it — the measure is the diff, not the intention. Ten nouns fit in a root help block
 an agent reads in one glance; an eleventh has to argue that it earns its line. `--data key=value`
@@ -360,7 +462,7 @@ nothing signals when.
 
 ```sh
 pip install -e ".[dev]"
-pytest                                   # ~590 tests, a couple of seconds
+pytest                                   # ~880 tests, a couple of seconds
 ruff check . && ruff format --check .
 ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
 ```
@@ -440,6 +542,15 @@ registry entry's composed name equals the `friendly_name` on its state, so a fix
 quietly tidies one away fails where the reason is written down. The bar for a fixture change is that
 **the shipped code before the fix would fail against it**; if the suite still passes against the old
 behaviour, the fixtures have not been corrected.
+
+**`tests/test_read_only.py` breaks two of this suite's habits on purpose, and both are in its
+docstring.** The variable name and the error code are written as literals rather than imported from
+`ha_axi.readonly`, for the same reason the doubles transcribe upstream rather than importing the
+client: a test that imported them would agree with a rename that broke every caller. And everything
+touching the new module imports it *inside* the test body, so that at the commit before the gate
+existed each test fails on its own account instead of the file collapsing into one collection
+error — which is what let the change be reported as "60 of 86 fail before, all pass after" rather
+than "the file does not load". Keep both if the file is extended.
 
 Two more rules that fall out of that:
 

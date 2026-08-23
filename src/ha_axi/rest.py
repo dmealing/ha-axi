@@ -18,8 +18,39 @@ from typing import Any
 from .config import Config
 from .errors import ApiError, AuthFailed, ConnectionFailed, NotFound
 from .output import debug
+from .readonly import READ, WRITE, guard
 
 _JSON = "application/json"
+
+
+#: The methods HTTP itself defines as safe. On a declared command the read-only
+#: classification is deliberate and a verb is never consulted, but `ha-axi api`
+#: hands an opaque path straight to the installation and the method is the only
+#: fact there is -- so this errs closed: safe methods pass, everything else is a
+#: write, including a POST that happens not to change anything.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: The one exception, and it is named rather than inferred. Rendering a template
+#: is a POST because the template travels in the body, and Home Assistant's
+#: template sandbox cannot call a service or write a state -- so `template
+#: render`, the most useful read this tool has, would otherwise be refused by
+#: its own verb.
+READ_ONLY_POSTS = frozenset({"/api/template"})
+
+
+def access_for_request(method: str, path: str) -> str:
+    """The read-only classification of one REST request.
+
+    Named to match :func:`ha_axi.ws.access_for_type`: one function per
+    transport, answering the same question about the thing that transport is
+    about to send. ``path`` is expected in the form :func:`api_path` returns.
+    """
+    method = method.upper()
+    if method in SAFE_METHODS:
+        return READ
+    if method == "POST" and path in READ_ONLY_POSTS:
+        return READ
+    return WRITE
 
 
 def api_path(path: str) -> str:
@@ -83,7 +114,17 @@ class RestClient:
 
         Returns parsed JSON when the response is JSON, otherwise the response
         text -- ``/api/template`` answers in ``text/plain``.
+
+        The read-only gate is applied here, ahead of the request, because this
+        is the one place every REST call passes through: a command added later
+        is guarded whether or not its author knew there was a gate.
         """
+        resolved = api_path(path)
+        guard(
+            self.config.read_only,
+            access_for_request(method, resolved),
+            f"{method.upper()} {resolved}",
+        )
         url = self._url(path, query)
         data = None
         headers = dict(self.config.auth_header)

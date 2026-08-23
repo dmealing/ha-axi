@@ -6,7 +6,8 @@ import json
 
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
-from ..rest import api_path
+from ..readonly import DYNAMIC, READ, WRITE
+from ..rest import SAFE_METHODS, api_path
 from ._common import parse_json_flag, parse_pairs
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
@@ -19,6 +20,10 @@ COMMAND = Command(
     subs=(
         Sub(
             name="api",
+            # The path is opaque, so the verdict cannot come from the
+            # declaration; `access` below reads the method, which is the only
+            # thing the caller has told us.
+            access=DYNAMIC,
             args=("<method-or-path>", "[path]"),
             summary="Request a REST path",
             flags=(
@@ -39,6 +44,21 @@ COMMAND = Command(
         'ha-axi api POST /template --body \'{"template": "{{ now() }}"}\'',
     ),
 )
+
+
+def access(sub: str, parsed) -> str:
+    """The read-only verdict for one raw REST request.
+
+    An arbitrary path carries no classification, so the method is all there is,
+    and HTTP defines which methods are safe. Everything else is a write --
+    including the POST that renders a template, which is reachable here and is
+    genuinely a read: the typed `template render` is the route to it, and
+    guessing on this surface is what a fail-closed guard must not do. A
+    malformed invocation raises the same usage error it would have raised
+    anyway, rather than being reported as a refusal it never got to.
+    """
+    method, _ = _method_and_path(parsed.positionals)
+    return READ if method in SAFE_METHODS else WRITE
 
 
 def run(ctx, sub: str, parsed):

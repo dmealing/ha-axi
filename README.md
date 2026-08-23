@@ -32,7 +32,8 @@ scripts/install-hooks.sh   # point core.hooksPath at .githooks
 
 ## Configure
 
-Two environment variables, and nothing else:
+Two environment variables, and nothing else — a third, optional one makes the session
+[read-only](#read-only-sessions):
 
 ```sh
 export HA_URL=https://homeassistant.example.com   # or HASS_SERVER
@@ -52,7 +53,8 @@ Check both transports at once:
 ```sh
 $ ha-axi doctor
 healthy: true
-checks[3]{check,status,detail}:
+checks[4]{check,status,detail}:
+  read_only,ok,HA_AXI_READ_ONLY is not set: writes are allowed
   environment,ok,HA_URL and HA_TOKEN are set
   rest,ok,API running. (version 2026.1.0)
   websocket,ok,"authenticated, 128 registry entries in 6 areas"
@@ -60,6 +62,55 @@ version: 2026.1.0
 ```
 
 `doctor` exits non-zero when any leg fails, so it works as a gate in a script or a hook.
+
+## Read-only sessions
+
+A third variable makes a session incapable of changing anything:
+
+```sh
+export HA_AXI_READ_ONLY=1
+```
+
+Every write is then refused **before it is sent**, over REST and over the WebSocket alike:
+
+```sh
+$ ha-axi entity update light.example_lamp --name 'Reading Lamp'
+error: "`ha-axi entity update` is a write, and HA_AXI_READ_ONLY is set"
+code: READ_ONLY
+help[3]:
+  This session is read-only; the command was refused before anything changed
+  Reads still work, e.g. `ha-axi state list`, `ha-axi entity list`, `ha-axi area list`
+  Unset HA_AXI_READ_ONLY to allow writes; it is a switch, so any non-empty value enables it
+```
+
+Four things about it are deliberate, and the first two are why it is worth having at all.
+
+- **It is a variable, never a flag.** A flag is omitted by exactly the caller that most needs it.
+  Setting it in the environment covers every command the session runs, including the ones an agent
+  composes rather than a person types.
+- **Every subcommand and every WebSocket command carries an explicit classification, and the
+  default is a write.** Nothing is inferred from a command's name or from an HTTP verb: `service
+  call` mutates through a surface that looks like any other POST, and the WebSocket command set
+  does not follow REST conventions at all. A command nobody classified is refused, so the failure
+  mode of forgetting is a refusal rather than an unguarded mutation — and a test enumerates both
+  command tables and fails on the first declaration that has none.
+- **It is a switch, not a boolean.** Any non-empty value enables it, `0` and `false` included.
+  Parsing the value is how a guard comes to be off while an operator believes it is on; unsetting
+  the variable is the only way to allow writes.
+- **Refused commands stay visible.** They are still listed in `--help` and in the command table,
+  because an agent that cannot see the command it needs cannot work out why its plan is impossible.
+
+Reads are untouched, including `template render` — a POST that renders server-side and changes
+nothing. `ha-axi doctor` reports the mode, and the no-argument view prints `read_only: on` when it
+is set, so a session knows what it is before it plans anything.
+
+**What it does not cover.** `ha-axi api` hands an opaque path straight to the installation, so
+there the method is the only fact available and the rule errs closed: `GET`, `HEAD` and `OPTIONS`
+pass, everything else is refused, including a `POST` that happens not to change anything. Any
+Home Assistant endpoint that mutated on a `GET` would pass that check — none does, and the same
+assumption is the one every read-only HTTP proxy makes, but it is an assumption rather than a
+guarantee. `ha-axi ws --raw` is judged by the API type it names: one a declared command already
+names as a read passes, and an undeclared type is refused.
 
 ## Use
 
@@ -191,7 +242,9 @@ states[2]{entity_id,name,state}:
 - `--json` emits raw JSON.
 - **Errors go to stdout too**, in the same structured shape, and carry the command that fixes
   them. stderr carries only diagnostics (`--debug`), which agents do not read.
-- Exit codes: `0` success — including idempotent no-ops — `1` error, `2` usage error.
+- Exit codes: `0` success — including idempotent no-ops — `1` error, `2` usage error. A read-only
+  refusal is a `2`: the verdict is reached without touching the installation, and no argument to
+  the same command changes it.
 - Unknown flags and extra arguments are **rejected by name** rather than ignored, with the
   subcommand's valid flags listed inline so the correction takes one turn, not two.
 
