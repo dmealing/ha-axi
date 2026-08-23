@@ -10,7 +10,8 @@ from __future__ import annotations
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ..output import HelpBlock
-from ..ws import REGISTRY
+from ..readonly import DYNAMIC, READ
+from ..ws import REGISTRY, access_for_type
 from ._common import parse_json_flag, parse_pairs, plural
 
 COMMAND = Command(
@@ -21,6 +22,10 @@ COMMAND = Command(
     subs=(
         Sub(
             name="ws",
+            # Which command is being sent is an argument, so `access` below
+            # resolves it -- from the declaration for a declared name, and from
+            # the type for `--raw`.
+            access=DYNAMIC,
             args=("[command]",),
             summary="Send one WebSocket command by name or by raw type",
             flags=(
@@ -49,44 +54,82 @@ COMMAND = Command(
 )
 
 
-def run(ctx, sub: str, parsed):
-    if parsed.get("list"):
-        return _list(parsed)
+def _listing_only(parsed) -> bool:
+    """Whether this invocation only prints the command table."""
+    return bool(parsed.get("list")) or (not parsed.positionals and not parsed.get("raw"))
+
+
+def _resolve(parsed) -> str:
+    """The API type this invocation names, or the usage error it has earned.
+
+    Shared by :func:`access` and :func:`run` so the read-only gate and the
+    dispatch agree about what is being sent. Resolving it twice from two
+    readings of the same arguments is how a gate comes to guard a different
+    command from the one that runs.
+    """
     if not parsed.positionals:
-        if parsed.get("raw"):
-            raise UsageError(
-                "--raw needs an API command type",
-                help_lines=[
-                    "Run `ha-axi ws --raw config/floor_registry/list`",
-                    "Run `ha-axi ws --list` to see the declared commands",
-                ],
-                code="MISSING_COMMAND",
-            )
-        return _list(parsed)
-
+        raise UsageError(
+            "--raw needs an API command type",
+            help_lines=[
+                "Run `ha-axi ws --raw config/floor_registry/list`",
+                "Run `ha-axi ws --list` to see the declared commands",
+            ],
+            code="MISSING_COMMAND",
+        )
     name = parsed.positionals[0]
-    params = parse_pairs(parsed.get("param", []), flag="--param")
-    params.update(parse_json_flag(parsed.get("params_json"), flag="--params-json"))
-
     if parsed.get("raw"):
-        type_ = name
-    else:
-        command = REGISTRY.get(name)
-        if command is None:
-            if "/" in name:
-                raise UsageError(
-                    f"{name!r} looks like a raw API type, which needs --raw",
-                    help_lines=[f"Run `ha-axi ws --raw {name}`"],
-                    code="UNKNOWN_COMMAND",
-                )
+        return name
+    command = REGISTRY.get(name)
+    if command is None:
+        if "/" in name:
             raise UsageError(
-                f"unknown websocket command: {name}",
-                help_lines=[
-                    f"declared commands: {', '.join(sorted(REGISTRY))}",
-                    "Run `ha-axi ws --list` to see each command's parameters",
-                ],
+                f"{name!r} looks like a raw API type, which needs --raw",
+                help_lines=[f"Run `ha-axi ws --raw {name}`"],
                 code="UNKNOWN_COMMAND",
             )
+        raise UsageError(
+            f"unknown websocket command: {name}",
+            help_lines=[
+                f"declared commands: {', '.join(sorted(REGISTRY))}",
+                "Run `ha-axi ws --list` to see each command's parameters",
+            ],
+            code="UNKNOWN_COMMAND",
+        )
+    return command.type
+
+
+def access(sub: str, parsed) -> str:
+    """The read-only verdict for one WebSocket escape-hatch invocation.
+
+    Printing the table changes nothing, so `--list` and a bare `ha-axi ws` are
+    reads. Anything else is judged by the *type* it resolves to, which is what
+    makes `--raw config/entity_registry/update` refuse exactly as
+    `entity.update` does: the type is what reaches the installation, and a
+    second spelling of it must not buy a second verdict. A type no declaration
+    names is a write -- see :func:`ha_axi.ws.access_for_type`.
+    """
+    if _listing_only(parsed):
+        return READ
+    try:
+        return access_for_type(_resolve(parsed))
+    except UsageError:
+        # A name that resolves to nothing sends nothing; `run` raises the same
+        # error, which is a better answer than a refusal for a command that
+        # does not exist.
+        return READ
+
+
+def run(ctx, sub: str, parsed):
+    if _listing_only(parsed):
+        return _list(parsed)
+
+    name = parsed.positionals[0] if parsed.positionals else ""
+    params = parse_pairs(parsed.get("param", []), flag="--param")
+    params.update(parse_json_flag(parsed.get("params_json"), flag="--params-json"))
+    type_ = _resolve(parsed)
+
+    command = None if parsed.get("raw") else REGISTRY.get(name)
+    if command is not None:
         missing = [key for key in command.required if key not in params]
         if missing:
             raise UsageError(
@@ -98,7 +141,6 @@ def run(ctx, sub: str, parsed):
                 ],
                 code="MISSING_PARAM",
             )
-        type_ = command.type
 
     with ctx.ws() as client:
         result = client.send_command(type_, params)

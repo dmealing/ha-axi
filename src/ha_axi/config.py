@@ -15,6 +15,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .errors import ConfigError
 from .output import register_secret
+from .readonly import ENV_VAR as READ_ONLY_VAR
+from .readonly import enabled as read_only_enabled
 
 #: Primary variable names, with the ``hass-cli`` names accepted as fallbacks so
 #: an existing Home Assistant shell environment works unchanged.
@@ -38,11 +40,19 @@ _ILLEGAL_TOKEN = re.compile(r"[\s\x00-\x1f\x7f]")
 
 @dataclass(frozen=True)
 class Config:
-    """A resolved, ready-to-use connection configuration."""
+    """A resolved, ready-to-use connection configuration.
+
+    ``read_only`` rides along with the credentials because both transports hold
+    a :class:`Config` and both have to refuse a write of their own accord. It
+    defaults to ``False`` only because a configuration assembled by hand in a
+    test has no environment to read; every configuration the CLI builds goes
+    through :func:`load`, which reads it.
+    """
 
     base_url: str
     token: str
     timeout: float = DEFAULT_TIMEOUT
+    read_only: bool = False
 
     @property
     def rest_root(self) -> str:
@@ -151,6 +161,7 @@ def load(environ=None, *, timeout: float | None = None) -> Config:
         base_url=normalize_base_url(raw_url),
         token=token,
         timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
+        read_only=read_only_enabled(environ),
     )
 
 
@@ -183,4 +194,6 @@ def describe_environment(environ=None) -> dict:
         "url_set": bool(raw_url),
         "token_var": token_var or "",
         "token_set": bool(token),
+        "read_only": read_only_enabled(environ),
+        "read_only_var": READ_ONLY_VAR,
     }

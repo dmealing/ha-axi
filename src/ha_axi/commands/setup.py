@@ -8,6 +8,7 @@ from .. import hooks, skill
 from ..argspec import Command, Flag, Sub
 from ..errors import UsageError
 from ..output import HelpBlock
+from ..readonly import DYNAMIC, READ, WRITE
 
 COMMAND = Command(
     name="setup",
@@ -16,11 +17,18 @@ COMMAND = Command(
     subs=(
         Sub(
             name="hooks",
+            # `setup` writes to this machine rather than to Home Assistant, and
+            # counts as a write anyway. HA_AXI_READ_ONLY says this tool does not
+            # write; splitting that into "not your house" and "not your
+            # dotfiles" is a distinction nobody asked for, and the safe half of
+            # it is refusing both.
+            access=WRITE,
             summary="Install SessionStart hooks for Claude Code, Codex and OpenCode",
             flags=(Flag("--home", "<path>", note="install under a different home directory"),),
         ),
         Sub(
             name="skill",
+            access=DYNAMIC,
             summary="Write or verify the installable Agent Skill",
             flags=(
                 Flag("--path", "<dir>", default=".", note="repository root"),
@@ -40,6 +48,11 @@ COMMAND = Command(
         "ha-axi setup skill --check",
     ),
 )
+
+
+def access(sub: str, parsed) -> str:
+    """`skill --check` only reads the committed copy; without it the file is written."""
+    return READ if parsed.get("check") else WRITE
 
 
 def run(ctx, sub: str, parsed):

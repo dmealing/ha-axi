@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ..argspec import Command, Flag, Sub
 from ..output import HelpBlock, truncate
+from ..readonly import READ
 from ._common import (
     PREVIEW_CHARS,
     count_line,
@@ -34,6 +35,7 @@ COMMAND = Command(
     subs=(
         Sub(
             name="list",
+            access=READ,
             summary="List entity states",
             flags=(
                 Flag("--area", "<id|name>", note="'none' selects entities with no area"),
@@ -46,6 +48,7 @@ COMMAND = Command(
         ),
         Sub(
             name="get",
+            access=READ,
             args=("<entity_id>",),
             summary="Show one entity state with its attributes",
             flags=(Flag("--full", boolean=True, note="do not truncate long attributes"),),

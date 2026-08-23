@@ -130,5 +130,7 @@ def test_describe_environment_never_reveals_the_token():
         "url_set": True,
         "token_var": "HA_TOKEN",
         "token_set": True,
+        "read_only": False,
+        "read_only_var": "HA_AXI_READ_ONLY",
     }
     assert FAKE_TOKEN not in repr(described)

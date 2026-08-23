@@ -76,12 +76,21 @@ class Flag:
 
 @dataclass(frozen=True)
 class Sub:
-    """One subcommand: its positional arguments and its flag set."""
+    """One subcommand: its positional arguments, its flag set and its access.
+
+    ``access`` is the read-only classification, one of the values in
+    :data:`ha_axi.readonly.CLASSIFICATIONS`. It defaults to ``None`` -- an
+    absence rather than a value -- because that is what makes forgetting
+    visible: :func:`ha_axi.readonly.verdict` reads ``None`` as a write and
+    refuses it, and the completeness sweep in ``tests/test_read_only.py`` fails
+    on it rather than letting an unclassified command through.
+    """
 
     name: str
     args: tuple = ()
     flags: tuple = ()
     summary: str = ""
+    access: str | None = None
 
     def signature(self) -> str:
         return " ".join([self.name, *self.args]) if self.args else self.name
@@ -190,7 +199,7 @@ def parse(sub: Sub, argv: list, *, command: Command) -> Parsed:
                 raise UsageError(
                     f"{name} needs a value",
                     help_lines=[
-                        f"Run `{_invocation(command, sub)} {name} {flag.metavar or '<value>'}`"
+                        f"Run `{invocation(command, sub)} {name} {flag.metavar or '<value>'}`"
                     ],
                     code="MISSING_VALUE",
                 )
@@ -206,7 +215,13 @@ def parse(sub: Sub, argv: list, *, command: Command) -> Parsed:
     return result
 
 
-def _invocation(command: Command, sub: Sub) -> str:
+def invocation(command: Command, sub: Sub) -> str:
+    """How to spell one subcommand back at the caller.
+
+    Public because the read-only gate in :mod:`ha_axi.cli` names the command it
+    refused, and a refusal that spelled it differently from every other error
+    would read as a different command.
+    """
     if sub.name == command.default_sub and len(command.subs) == 1:
         return f"ha-axi {command.name}"
     return f"ha-axi {command.name} {sub.name}"
@@ -217,15 +232,15 @@ def _check_positionals(sub: Sub, command: Command, values: list) -> None:
     if len(values) < len(required):
         missing = required[len(values)]
         raise UsageError(
-            f"{_invocation(command, sub)} needs {missing}",
-            help_lines=[f"Run `{_invocation(command, sub)} {' '.join(sub.args)}`"],
+            f"{invocation(command, sub)} needs {missing}",
+            help_lines=[f"Run `{invocation(command, sub)} {' '.join(sub.args)}`"],
             code="MISSING_ARGUMENT",
         )
     if len(values) > len(sub.args):
         extra = values[len(sub.args)]
         raise UsageError(
             f"unexpected argument {extra!r} for `{command.name} {sub.name}`",
-            help_lines=[f"Run `{_invocation(command, sub)} {' '.join(sub.args)}`"],
+            help_lines=[f"Run `{invocation(command, sub)} {' '.join(sub.args)}`"],
             code="UNEXPECTED_ARGUMENT",
         )
 
@@ -236,7 +251,7 @@ def _unknown_flag(name: str, sub: Sub, command: Command):
     if replacement and replacement in valid:
         return UsageError(
             f"unknown flag {name} for `{command.name} {sub.name}`; use {replacement} instead",
-            help_lines=[f"Run `{_invocation(command, sub)} {replacement} <value>`"],
+            help_lines=[f"Run `{invocation(command, sub)} {replacement} <value>`"],
             code="UNKNOWN_FLAG",
         )
     listing = ", ".join(valid) if valid else "(none)"
