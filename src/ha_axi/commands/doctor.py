@@ -28,29 +28,23 @@ def run(ctx, sub: str, parsed):
     # connection -- and because a session that cannot write is the first thing
     # to know when a write has just been refused.
     checks = [
-        {
-            "check": "read_only",
-            "status": "ok",
-            "detail": (
-                f"{env['read_only_var']} is set: every write is refused"
-                if env["read_only"]
-                else f"{env['read_only_var']} is not set: writes are allowed"
-            ),
-        }
+        _check(
+            "read_only",
+            "ok",
+            f"{env['read_only_var']} is set: every write is refused"
+            if env["read_only"]
+            else f"{env['read_only_var']} is not set: writes are allowed",
+        )
     ]
 
     missing = missing_env_vars(ctx.environ)
     if missing:
-        checks.append(_failed("environment", f"{' and '.join(missing)} not set", "NOT_CONFIGURED"))
+        checks.append(
+            _check("environment", "fail", f"{' and '.join(missing)} not set", "NOT_CONFIGURED")
+        )
         return _document(checks, healthy=False)
 
-    checks.append(
-        {
-            "check": "environment",
-            "status": "ok",
-            "detail": f"{env['url_var']} and {env['token_var']} are set",
-        }
-    )
+    checks.append(_check("environment", "ok", f"{env['url_var']} and {env['token_var']} are set"))
 
     version = ""
     try:
@@ -60,40 +54,36 @@ def run(ctx, sub: str, parsed):
         if isinstance(info, dict):
             version = info.get("version", "")
         checks.append(
-            {
-                "check": "rest",
-                "status": "ok",
-                "detail": f"{detail or 'reachable'}{f' (version {version})' if version else ''}",
-            }
+            _check(
+                "rest", "ok", f"{detail or 'reachable'}{f' (version {version})' if version else ''}"
+            )
         )
     except AxiError as exc:
         healthy = False
-        checks.append(_failed("rest", exc.message, exc.code))
+        checks.append(_check("rest", "fail", exc.message, exc.code))
 
     try:
         with ctx.ws() as client:
             entities = client.run("entity.list") or []
             areas = client.run("area.list") or []
         checks.append(
-            {
-                "check": "websocket",
-                "status": "ok",
-                "detail": (
-                    "authenticated, "
-                    f"{plural(len(entities), 'registry entry', 'registry entries')} "
-                    f"in {plural(len(areas), 'area')}"
-                ),
-            }
+            _check(
+                "websocket",
+                "ok",
+                "authenticated, "
+                f"{plural(len(entities), 'registry entry', 'registry entries')} "
+                f"in {plural(len(areas), 'area')}",
+            )
         )
     except AxiError as exc:
         healthy = False
-        checks.append(_failed("websocket", exc.message, exc.code))
+        checks.append(_check("websocket", "fail", exc.message, exc.code))
 
     return _document(checks, healthy=healthy, version=version)
 
 
-def _failed(check: str, message: str, code: str | None) -> dict:
-    """One failed check, carrying the same code and class the command would.
+def _check(name: str, status: str, detail: str, code: str | None = None) -> dict:
+    """One check row -- the only place the shape is built, passing or failing.
 
     `doctor` already told the two transports apart; what it could not tell
     apart was *why* either had failed, because a check row carried prose and
@@ -108,12 +98,19 @@ def _failed(check: str, message: str, code: str | None) -> dict:
     already answers the same condition with. The class is derived from the
     code rather than written beside it, so `errors.CODES` stays the only
     place the pair is declared.
+
+    `detail` is assigned after the block rather than in the literal, because a
+    failing row carries `code` and `class` between `status` and `detail` and
+    rows render in insertion order -- prose goes after the fields a caller
+    switches on. Moving it into the literal would silently reorder every
+    failing row, so a passing row reaches the same three keys by passing no
+    code rather than by being built somewhere else.
     """
-    row = {"check": check, "status": "fail"}
+    row = {"check": name, "status": status}
     if code:
         row["code"] = code
         row["class"] = fault_class(code)
-    row["detail"] = message
+    row["detail"] = detail
     return row
 
 

@@ -76,6 +76,15 @@ def run(ctx, sub: str, parsed):
 
 
 def _row(state: dict) -> dict:
+    """The one place a state row is built -- `list` and `get` both come here.
+
+    The missing-`entity_id` default is `""` rather than the id `get` was asked
+    for, because `list` has none to fall back to and because echoing the
+    caller's own argument back would make a malformed answer read as a
+    well-formed one. Neither default is reachable: `/api/states/<id>` answers
+    with `State.as_dict()`, which always carries `entity_id`, and a missing
+    subject is a 404 raised as `NO_SUCH_ENTITY` before any row is built.
+    """
     return {
         "entity_id": state.get("entity_id", ""),
         "name": friendly_name(state),
@@ -180,14 +189,7 @@ def _get(ctx, parsed):
                 )
 
     doc = {
-        "state": {
-            "entity_id": state.get("entity_id", entity_id),
-            "name": friendly_name(state),
-            "state": state.get("state", ""),
-            "domain": domain_of(state.get("entity_id", entity_id)),
-            "last_changed": state.get("last_changed", ""),
-            "last_updated": state.get("last_updated", ""),
-        },
+        "state": _row(state),
         "attributes": attributes if attributes else {},
     }
     if not attributes:

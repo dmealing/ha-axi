@@ -213,6 +213,17 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   device-placed entity replied `area: ""` while `entity get` on the same entity said otherwise. The
   data was never damaged — but an agent reads the update response, and an empty area there reads as
   "unassigned". Update and get now share `_row()` and both carry `area_source`.
+- **A repeated row shape gets one constructor, and the row's key order is part of its output.**
+  `state._row` and `doctor._check` are each the only place their shape is built, so a field added
+  later cannot reach some callers and miss others — `state get` and `doctor`'s four passing checks
+  had each open-coded a copy. Two rules fall out of collapsing them. `state._row` defaults a missing
+  `entity_id` to `""` and not to the id `state get` was asked for, because `state list` has no
+  requested id to fall back to and echoing the caller's own argument back would dress a malformed
+  answer as a well-formed one; neither default is reachable, since `/api/states/<id>` answers with
+  `State.as_dict()` and a missing subject is a 404 long before a row is built. And `doctor._check`
+  assigns `detail` after the optional `code`/`class` rather than inside the literal, because rows
+  render in insertion order and a failing row puts prose after the two fields a caller switches on
+  — folding `detail` into the literal would silently reorder every failing check row.
 - **`state` (REST) and `entity` (WebSocket) are different views.** Names and areas exist only in the
   registry; states exist only over REST. `state list --area` therefore reads the registry over the
   WebSocket — the only data command that crosses transports; `doctor` uses both too, but only to
