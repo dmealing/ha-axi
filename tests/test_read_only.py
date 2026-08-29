@@ -266,6 +266,41 @@ def test_the_same_websocket_write_succeeds_with_the_variable_unset(run_cli, ws_e
     assert [c for c in ws_server.received if c["type"] == "config/entity_registry/update"]
 
 
+def test_a_device_registry_write_is_refused_before_it_reaches_the_installation(
+    run_cli, ws_env, ws_server
+):
+    """The device registry is a second write surface on the same transport.
+
+    A classification is a claim a module makes about itself, so a newly declared
+    `WRITE` sub proves nothing until the gate is seen refusing it: a write that
+    is not actually gated is the failure this whole file exists to prevent, and
+    it is invisible from the declaration alone.
+    """
+    code, out = run_cli(
+        ["device", "update", "device_two", "--name", "Hall Ceiling"], enabled(ws_env)
+    )
+    assert code == 2
+    assert f"code: {CODE}" in out
+    assert ENV_VAR in out
+    assert "device update" in out
+    assert ws_server.received == []
+
+
+def test_the_same_device_write_succeeds_with_the_variable_unset(run_cli, ws_env, ws_server):
+    code, _ = run_cli(["device", "update", "device_two", "--name", "Hall Ceiling"], ws_env)
+    assert code == 0
+    assert [c for c in ws_server.received if c["type"] == "config/device_registry/update"]
+
+
+def test_clearing_a_device_field_is_a_write_too(run_cli, ws_env, ws_server):
+    """`--clear-name` and `--clear-area` remove data, so neither is a read."""
+    for flag in ("--clear-name", "--clear-area"):
+        code, out = run_cli(["device", "update", "device_two", flag], enabled(ws_env))
+        assert code == 2, flag
+        assert f"code: {CODE}" in out
+    assert ws_server.received == []
+
+
 # ------------------------------------------- the transports guard themselves
 
 
@@ -392,6 +427,7 @@ WS_READ_INVOCATIONS = [
     ["area", "list"],
     ["area", "get", "example_room"],
     ["device", "list"],
+    ["device", "get", "device_two"],
     ["ws", "entity.list"],
 ]
 

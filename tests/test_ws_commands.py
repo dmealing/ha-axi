@@ -265,6 +265,8 @@ def test_entity_update_rejects_conflicting_area_flags(run_cli, ws_env):
         ["entity", "update", "light.example_lamp", "--icon", "mdi:lamp", "--clear-icon"],
         ["area", "update", "example_room", "--icon", "mdi:sofa", "--clear-icon"],
         ["area", "update", "example_room", "--floor", "ground", "--clear-floor"],
+        ["device", "update", "device_two", "--name", "Renamed", "--clear-name"],
+        ["device", "update", "device_two", "--area", "example_room", "--clear-area"],
     ],
 )
 def test_update_rejects_a_set_flag_paired_with_its_clear(run_cli, ws_env, argv):
@@ -488,6 +490,284 @@ def test_device_list_rejects_an_unknown_area(run_cli, ws_env):
     code, out = run_cli(["device", "list", "--area", "Nowhere"], ws_env)
     assert code == 1
     assert "no area with id or name" in out
+
+
+# ------------------------------------------- the device registry as a write surface
+
+
+#: `device list` with no flags, pinned in full. The list surface predates the
+#: write surface and scripts already read it, so `get` and `update` were added
+#: by routing all three through one row builder rather than by reshaping this.
+DEFAULT_DEVICE_LIST = """count: 4 of 4 total
+devices[4]{device_id,name,area}:
+  device_one,Example Lamp Fitting,Example Room
+  device_two,Example Ceiling,Example Hall
+  device_three,Example Hub,""
+  device_four,Example Doorway,Example Room
+help[1]:
+  Run `ha-axi entity list --area <id|name>` to see the entities in an area
+"""
+
+
+def test_device_list_is_unchanged_by_the_write_surface(run_cli, ws_env):
+    code, out = run_cli(["device", "list"], ws_env)
+    assert code == 0
+    assert out == DEFAULT_DEVICE_LIST
+
+
+def test_device_get_accepts_an_id_or_the_displayed_name(run_cli, ws_env):
+    _, by_id = run_cli(["device", "get", "device_two"], ws_env)
+    _, by_name = run_cli(["device", "get", "Example Ceiling"], ws_env)
+    assert by_id == by_name
+    assert "device_id: device_two" in by_id
+    assert "entities: 1" in by_id
+
+
+def test_device_get_resolves_a_name_case_insensitively(run_cli, ws_env):
+    code, out = run_cli(["device", "get", "example ceiling"], ws_env)
+    assert code == 0
+    assert "device_id: device_two" in out
+
+
+def test_device_get_reports_both_names_and_which_one_is_showing(run_cli, ws_env):
+    """`name` and `name_by_user` are different fields and only one is writable.
+
+    device_two carries a user rename, so what Home Assistant displays is not the
+    integration's `Ceiling Fitting` at all; device_three carries none.
+    """
+    _, renamed = run_cli(["device", "get", "device_two"], ws_env)
+    assert "name: Example Ceiling" in renamed
+    assert "name_by_user: Example Ceiling" in renamed
+    assert "name_source: user" in renamed
+
+    _, untouched = run_cli(["device", "get", "device_three"], ws_env)
+    assert "name: Example Hub" in untouched
+    assert 'name_by_user: ""' in untouched
+    assert "name_source: integration" in untouched
+
+
+def test_device_get_says_where_the_area_stands(run_cli, ws_env):
+    _, placed = run_cli(["device", "get", "device_two"], ws_env)
+    assert "area: Example Hall" in placed
+    assert "area_source: device" in placed
+
+    # device_three is in no area, which is why the entities it supplies are in
+    # none either.
+    _, unplaced = run_cli(["device", "get", "device_three"], ws_env)
+    assert 'area: ""' in unplaced
+    assert 'area_source: ""' in unplaced
+
+
+def test_device_get_names_a_dangling_area_id_rather_than_implying_a_placement(
+    run_cli, ws_env, ws_server
+):
+    # Home Assistant takes `ws device.update --param area_id=<typo>` without
+    # complaint. `area` is empty either way, and "in no area" and "holding an id
+    # nothing answers to" are different facts with different fixes.
+    ws_server.devices[0]["area_id"] = "no_such_area"
+    code, out = run_cli(["device", "get", "device_one"], ws_env)
+    assert code == 0
+    assert "area_id: no_such_area" in out
+    assert "area_source: no area has this id" in out
+
+
+def test_device_get_on_a_missing_device_offers_a_way_to_find_it(run_cli, ws_env):
+    code, out = run_cli(["device", "get", "Example Absent"], ws_env)
+    assert code == 1
+    assert "no device with id or name 'Example Absent'" in out
+    assert "NO_SUCH_DEVICE" in out
+    assert 'Run `ha-axi device list --search "Example Absent"` to find it' in out
+    assert "Traceback" not in out
+
+
+def test_device_get_refuses_a_name_two_devices_answer_to(run_cli, ws_env, ws_server):
+    """An ambiguous name is an error rather than a guess, as it is on an area."""
+    ws_server.devices.append(
+        {
+            "id": "device_five",
+            "name": "Example Ceiling",
+            "name_by_user": None,
+            "disabled_by": None,
+            "area_id": None,
+            "manufacturer": "Example Co",
+            "model": "Model W",
+        }
+    )
+    code, out = run_cli(["device", "get", "Example Ceiling"], ws_env)
+    assert code == 1
+    assert "matches more than one device" in out
+    assert "AMBIGUOUS_DEVICE" in out
+    assert "device_two" in out and "device_five" in out
+
+
+def test_an_id_wins_over_a_name_that_happens_to_look_like_one(run_cli, ws_env, ws_server):
+    # A device whose displayed name is another device's id must not shadow it.
+    ws_server.devices.append(
+        {
+            "id": "device_five",
+            "name": "device_two",
+            "name_by_user": None,
+            "disabled_by": None,
+            "area_id": None,
+            "manufacturer": "Example Co",
+            "model": "Model W",
+        }
+    )
+    code, out = run_cli(["device", "get", "device_two"], ws_env)
+    assert code == 0
+    assert "device_id: device_two" in out
+
+
+def test_device_update_sets_name_by_user_and_the_area(run_cli, ws_env, ws_server):
+    code, out = run_cli(
+        ["device", "update", "device_two", "--name", "Hall Ceiling", "--area", "Example Room"],
+        ws_env,
+    )
+    assert code == 0
+    assert "updated[2]: area_id,name_by_user" in out
+    update = next(c for c in ws_server.received if c["type"] == "config/device_registry/update")
+    # The user override is what is written; the integration's own name is not a
+    # field Home Assistant accepts here at all.
+    assert update["name_by_user"] == "Hall Ceiling"
+    assert "name" not in update
+    assert update["area_id"] == "example_room"
+    assert ws_server.devices[1]["name_by_user"] == "Hall Ceiling"
+    assert ws_server.devices[1]["name"] == "Ceiling Fitting"
+
+
+def test_device_update_is_visible_in_a_following_device_get(run_cli, ws_env):
+    assert run_cli(["device", "update", "device_one", "--name", "Reading Fitting"], ws_env)[0] == 0
+    code, out = run_cli(["device", "get", "device_one"], ws_env)
+    assert code == 0
+    assert "name: Reading Fitting" in out
+    assert "name_by_user: Reading Fitting" in out
+    assert "name_source: user" in out
+
+
+def test_device_update_and_device_get_agree_about_the_area(run_cli, ws_env):
+    """The two views are built from the same row, so they cannot drift apart."""
+    _, updated = run_cli(["device", "update", "device_three", "--area", "Example Hall"], ws_env)
+    _, fetched = run_cli(["device", "get", "device_three"], ws_env)
+
+    def area_lines(text):
+        wanted = ("area:", "area_id:", "area_source:")
+        return [line.strip() for line in text.splitlines() if line.strip().startswith(wanted)]
+
+    assert (
+        area_lines(updated)
+        == area_lines(fetched)
+        == ["area: Example Hall", "area_id: example_hall", "area_source: device"]
+    )
+
+
+def test_device_update_accepts_the_displayed_name_as_the_subject(run_cli, ws_env, ws_server):
+    code, out = run_cli(["device", "update", "Example Doorway", "--area", "Example Hall"], ws_env)
+    assert code == 0
+    assert "device: device_four" in out
+    update = next(c for c in ws_server.received if c["type"] == "config/device_registry/update")
+    assert update["device_id"] == "device_four"
+
+
+def test_device_update_can_clear_the_name_and_the_area(run_cli, ws_env, ws_server):
+    code, out = run_cli(["device", "update", "device_two", "--clear-name", "--clear-area"], ws_env)
+    assert code == 0
+    update = next(c for c in ws_server.received if c["type"] == "config/device_registry/update")
+    assert update["name_by_user"] is None and update["area_id"] is None
+    # Clearing the override falls back to the integration's name, not to blank.
+    assert "name: Ceiling Fitting" in out
+    assert 'name_by_user: ""' in out
+    assert 'area: ""' in out
+
+
+def test_device_update_is_idempotent(run_cli, ws_env, ws_server):
+    code, out = run_cli(["device", "update", "device_two", "--name", "Example Ceiling"], ws_env)
+    assert code == 0
+    assert "no change made" in out
+    assert "name: Example Ceiling" in out
+    assert [c for c in ws_server.received if c["type"] == "config/device_registry/update"] == []
+
+
+def test_device_update_needs_something_to_change(run_cli, ws_env, ws_server):
+    code, out = run_cli(["device", "update", "device_two"], ws_env)
+    assert code == 2
+    assert "nothing to update" in out
+    assert "NO_CHANGES" in out
+    assert ws_server.received == []
+
+
+def test_device_update_rejects_an_unknown_device(run_cli, ws_env, ws_server):
+    code, out = run_cli(["device", "update", "Example Absent", "--name", "Renamed"], ws_env)
+    assert code == 1
+    assert "no device with id or name 'Example Absent'" in out
+    assert "NO_SUCH_DEVICE" in out
+    assert [c for c in ws_server.received if c["type"] == "config/device_registry/update"] == []
+
+
+def test_device_update_rejects_an_unknown_area_with_a_way_forward(run_cli, ws_env, ws_server):
+    code, out = run_cli(["device", "update", "device_two", "--area", "Nowhere"], ws_env)
+    assert code == 1
+    assert "no area with id or name 'Nowhere'" in out
+    assert "NO_SUCH_AREA" in out
+    assert "ha-axi area list" in out
+    assert [c for c in ws_server.received if c["type"] == "config/device_registry/update"] == []
+
+
+def test_device_update_answers_from_the_stored_entry_not_from_the_request(run_cli, ws_env):
+    """The double answers with the device it now holds, fields and all.
+
+    Reporting from the payload instead is the defect `entity update` shipped:
+    an update that never read the registry claimed an area the entity did not
+    have, and an agent reads the update response.
+    """
+    import json
+
+    code, out = run_cli(
+        ["--json", "device", "update", "device_two", "--name", "Hall Ceiling"], ws_env
+    )
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["name"] == "Hall Ceiling"
+    # Never asked for, and reported anyway, because it comes from the registry.
+    assert doc["area"] == "Example Hall"
+    assert doc["area_id"] == "example_hall"
+
+
+def test_a_device_rename_reaches_every_entity_the_device_names(run_cli, ws_env):
+    """The reason the write belongs at this level rather than on each entity.
+
+    light.example_ceiling has no name of its own: everything it is called comes
+    from device_two, so one device-level correction moves it and leaves nothing
+    behind that still says the old name.
+    """
+    _, before = run_cli(["entity", "list", "--domain", "light"], ws_env)
+    assert "light.example_ceiling,Example Ceiling," in before
+
+    assert run_cli(["device", "update", "device_two", "--name", "Hall Ceiling"], ws_env)[0] == 0
+
+    _, after = run_cli(["entity", "list", "--domain", "light"], ws_env)
+    assert "light.example_ceiling,Hall Ceiling," in after
+    assert run_cli(["entity", "list", "--search", "Hall Ceiling"], ws_env)[1].count(
+        "light.example_ceiling"
+    )
+
+
+def test_a_mistyped_device_subcommand_is_not_swallowed_by_the_default_one(run_cli, ws_env):
+    """`device` defaults to `list`, and that must not hide a spelling mistake.
+
+    A bare leading token that `list` has no positional to hold can only be a
+    subcommand name, and `unexpected argument 'updat' for `device list`` names a
+    subcommand nobody typed.
+    """
+    code, out = run_cli(["device", "updat", "device_two"], ws_env)
+    assert code == 2
+    assert "unknown subcommand `updat` for `device`" in out
+    assert "subcommands: list, get, update" in out
+
+
+def test_the_default_subcommand_still_answers_with_no_subcommand_at_all(run_cli, ws_env):
+    code, out = run_cli(["device", "--fields", "device_id,name"], ws_env)
+    assert code == 0
+    assert "devices[4]{device_id,name}:" in out
 
 
 # ------------------------------- the name Home Assistant actually displays

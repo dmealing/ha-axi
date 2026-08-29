@@ -275,17 +275,29 @@ def _unknown_command(name: str):
 
 
 def _pick_sub(command: Command, argv: list) -> tuple:
-    if argv and not argv[0].startswith("-"):
-        sub = command.find(argv[0])
+    leading = argv[0] if argv and not argv[0].startswith("-") else None
+    if leading is not None:
+        sub = command.find(leading)
         if sub is not None:
             return sub, argv[1:]
-    if command.default_sub:
-        sub = command.find(command.default_sub)
-        if sub is not None:
-            return sub, argv
-    if argv and not argv[0].startswith("-"):
+
+    default = command.find(command.default_sub) if command.default_sub else None
+    # A default subcommand is what makes `ha-axi device` mean `ha-axi device
+    # list`. It must not also swallow a *mistyped* subcommand name: on a command
+    # that has others, a bare leading token the default sub declares no
+    # positional to hold can only be one, and `unexpected argument 'updat' for
+    # \`device list\`` names a subcommand nobody typed and sends the reader
+    # looking for an argument mistake instead of a spelling one. A default sub
+    # that does take positionals -- `ws <command>`, `api <path>` -- is given the
+    # token, because there it is the subject rather than a name.
+    if default is not None:
+        swallows_a_typo = leading is not None and len(command.subs) > 1 and not default.args
+        if not swallows_a_typo:
+            return default, argv
+
+    if leading is not None:
         raise UsageError(
-            f"unknown subcommand `{argv[0]}` for `{command.name}`",
+            f"unknown subcommand `{leading}` for `{command.name}`",
             help_lines=[
                 f"subcommands: {', '.join(s.name for s in command.subs)}",
                 f"Run `ha-axi {command.name} --help` for the full reference",

@@ -61,16 +61,20 @@ def device_area_map(devices: list) -> dict:
     return {device.get("id"): device.get("area_id") for device in devices}
 
 
-def device_name_map(devices: list) -> dict:
-    """Map each device id to the name Home Assistant displays for it.
+def displayed_device_name(device: dict) -> str:
+    """The name Home Assistant displays for one device.
 
-    A user rename wins over the integration's, which is the same precedence
-    `device list` reports and the same one entity name composition needs.
+    A user rename (`name_by_user`) wins over the integration's own `name`, which
+    is the precedence `device list` reports, the one entity name composition
+    needs, and the reason `device update --name` writes `name_by_user`: the
+    integration's `name` is not a field Home Assistant lets anybody change.
     """
-    return {
-        device.get("id"): (device.get("name_by_user") or device.get("name") or "")
-        for device in devices
-    }
+    return device.get("name_by_user") or device.get("name") or ""
+
+
+def device_name_map(devices: list) -> dict:
+    """Map each device id to the name Home Assistant displays for it."""
+    return {device.get("id"): displayed_device_name(device) for device in devices}
 
 
 def area_name_map(areas: list) -> dict:
@@ -218,26 +222,78 @@ def resolve_area(areas: list, needle: str) -> dict:
     )
 
 
-def resolve_device(devices: list, device_id: str) -> dict:
-    """Find a device by its id, which is the only handle it has.
-
-    A device id is opaque, so unlike an area there is no name to fall back on:
-    an id no device answers to is a failed lookup against the live registry --
-    exit 1, the same side of the line `resolve_area` puts a missing area on --
-    and not an empty result, or an agent that truncates one loops on filter
-    variations instead of re-reading the registry that holds the real spelling.
-    """
-    needle = device_id.strip()
+def _device_by_id(devices: list, needle: str) -> dict | None:
     for device in devices:
         if device.get("id") == needle:
             return device
-    raise NotFound(
-        f"no device with id {needle!r}",
-        help_lines=[
-            "Run `ha-axi device list --fields device_id,name` to see each device's id",
-        ],
+    return None
+
+
+def _no_such_device(needle: str, *, by_name: bool) -> NotFound:
+    """The one failed-device-lookup error, phrased for the handle that was tried.
+
+    Exit 1, the same side of the line `resolve_area` puts a missing area on: the
+    command was well formed and only the live registry could say the subject is
+    not there.
+    """
+    help_lines = ["Run `ha-axi device list --fields device_id,name` to see each device's id"]
+    if by_name:
+        help_lines.insert(0, f'Run `ha-axi device list --search "{needle}"` to find it')
+    return NotFound(
+        f"no device with {'id or name' if by_name else 'id'} {needle!r}",
+        help_lines=help_lines,
         code="NO_SUCH_DEVICE",
     )
+
+
+def resolve_device(devices: list, device_id: str) -> dict:
+    """Find a device by its id alone, which is all `entity list --device` is given.
+
+    That flag is declared `<device_id>` and means it: substring-matching an
+    opaque hex id is an accident rather than a filter, so there is deliberately
+    no name fallback here. An id no device answers to is a failed lookup and not
+    an empty result, or an agent that truncated one loops on filter variations
+    instead of re-reading the registry that holds the real spelling.
+    :func:`resolve_device_ref` is the `<id|name>` form the `device` command
+    itself takes.
+    """
+    needle = device_id.strip()
+    device = _device_by_id(devices, needle)
+    if device is not None:
+        return device
+    raise _no_such_device(needle, by_name=False)
+
+
+def resolve_device_ref(devices: list, needle: str) -> dict:
+    """Find a device by its ``id`` or by the name Home Assistant displays for it.
+
+    The id is tried first, so a device whose displayed name happens to be
+    another device's id still resolves to the thing that was named. The name is
+    the composed one -- `name_by_user` over `name` -- because that is the only
+    spelling a user has ever seen, and matching the integration's own name for a
+    device somebody renamed would resolve a name nothing displays. Two devices
+    may share a displayed name, which is an error rather than a guess for the
+    same reason it is on an area.
+    """
+    text = needle.strip()
+    device = _device_by_id(devices, text)
+    if device is not None:
+        return device
+    lowered = text.lower()
+    matches = [d for d in devices if displayed_device_name(d).strip().lower() == lowered]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        ids = ", ".join(d.get("id", "") for d in matches)
+        raise AxiError(
+            f"{needle!r} matches more than one device: {ids}",
+            help_lines=[
+                "Pass the device_id instead of the name",
+                "Run `ha-axi device list --fields device_id,name` to see each device's id",
+            ],
+            code="AMBIGUOUS_DEVICE",
+        )
+    raise _no_such_device(text, by_name=True)
 
 
 def area_is_placed(area_id: str, areas: list) -> bool:
