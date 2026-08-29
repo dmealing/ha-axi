@@ -129,6 +129,10 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   `commands/service.py` under the local alias `model`. No I/O and no cache: the caller fetches,
   and decides whether the answer is worth the round-trip. It is **not in this repository**; see
   "The service model is a dependency now" below.
+- `commands/context.py` — the ambient document a session hook prints, and the only command whose
+  contract is *when* it runs rather than what it answers. It reaches no transport and reads no
+  credential, so it cannot fail; `hooks.py` is its only intended caller and a human running it is
+  reading what their agents were told. See "The session-hook installer" below.
 - `errors.py` — the error types, the eight fault classes, and `CODES`: the closed vocabulary of
   every code this tool can print, each mapped to its class. It imports nothing at all, so every
   other module can depend on it. See "The error taxonomy" below; the short version is that the class
@@ -182,7 +186,7 @@ this dependency, not something to absorb quietly.
 - **Redirects never carry the token off-origin.** `rest._SameOriginRedirectHandler` refuses any
   redirect that changes scheme or netloc; urllib would otherwise copy `Authorization` onto it.
 - **URL userinfo is stripped in `normalize_base_url` and registered as a secret.** The no-argument
-  home view prints the base URL, and `setup hooks` runs that view into every agent session.
+  home view prints the base URL, so userinfo must not survive into it.
 - **A bare host defaults to `https://`**, never `http://`.
 - **`HA_AXI_READ_ONLY` holds at three points, and the two transports are the load-bearing ones.**
   See "The read-only gate" below. Do not move enforcement into command bodies, do not add a
@@ -343,8 +347,8 @@ this dependency, not something to absorb quietly.
   and offered help about *fields*, which were never the problem.
 - **`unavailable` and `unknown` are different facts and the home view counts them apart.** `unknown`
   means reachable and not yet reporting, which is the common one — a live instance had 12 `unknown`
-  and 0 `unavailable`. Summing them under the name of one of them made the landing view, the one
-  `setup hooks` puts in front of every session, contradict `state list --state unavailable` outright.
+  and 0 `unavailable`. Summing them under the name of one of them made the home view contradict
+  `state list --state unavailable` outright.
 - **A 404 that carries a message is not a wrong path.** aiohttp answers an unrouted path with
   plain-text `404: Not Found` and no body; a routed path whose *subject* is missing answers in JSON
   — `/states/<id>` says `Entity not found.`. `rest._http_error` quotes the message when there is one
@@ -513,10 +517,11 @@ something a caller can act on.
 ### The two views that reported a failure with no code at all
 
 `home` and `doctor` catch `AxiError` and fold it into their own document rather than letting it
-reach `cli._error_document`, so neither printed a code. `home` is the landing view `setup hooks` puts
-in front of **every** agent session — the most-read error surface the tool has, and the one that
-could not be classified. Both carry `code` and `class` now: `home` at the top level, `doctor` on the
-failing check row, which is what makes the case a reverse proxy actually produces — REST answering
+reach `cli._error_document`, so neither printed a code. `home` is the live-state view an agent asks
+for once it has a reason to — the most-read error surface the tool has, the session hook's
+`context` document being one that cannot fail — and the one that could not be classified. Both
+carry `code` and `class` now: `home` at the top level, `doctor` on the failing check row, which is
+what makes the case a reverse proxy actually produces — REST answering
 and the WebSocket upgrade refused — two readable facts instead of one unhealthy instance. A failing
 `doctor` therefore renders its `checks` block in **list** form rather than tabular, because the rows
 stop being uniform; a healthy one is still tabular and `test_doctor_still_answers_healthy_in_tabular_form`
@@ -613,13 +618,91 @@ this paragraph exists so nobody "fixes" one to match the other.
 every transport failure, because "this session forbids writes" and "that server refused you" have
 different fixes and an agent that cannot tell them apart retries the wrong one. `doctor` reports the
 mode as its first check — the only check needing neither configuration nor a connection — and the
-home view prints `read_only: on` when it is set and stays silent when it is not, because that view
-loads at the start of every session and an unset switch is not worth the tokens.
+home view and the `context` document a session hook prints both report `read_only: on` when it is
+set and stay silent when it is not, because an unset switch is not worth the tokens.
 
 **Verified against a live installation, not only against the doubles.** Both transports were
 refused live and both worked again with the variable unset; the area registry was counted before
 and after to prove the refused create reached nothing. The recipe is the one in "Build, test, lint"
 below — credentials fetched per command, never stored — and the suite itself stays offline.
+
+## The session-hook installer
+
+`hooks.py` writes into three files nobody in this project owns: the user's `~/.claude/settings.json`,
+their `~/.codex/config.toml`, and an OpenCode plugin directory. That is what makes its failure mode
+different from every other module here — a mistake does not produce a wrong answer, it damages a
+file the user has to repair by hand — and all three rules below were paid for by a defect that
+shipped in 0.5.1 and was found in the sibling AXI CLI, which had been given this design to port.
+
+**Ownership is a key this installer writes, never a substring of the command.** An entry it wrote
+carries `managed_by: ha-axi`, and `_managed_hook` is the single construction site so what is written
+and what is claimed cannot drift. Matching `"ha-axi" in command` claimed hooks this tool never wrote
+— a user's `env HA_URL=… ha-axi`, another interpreter, a shell wrapper — and silently rewrote them
+out of the user's own global settings while reporting the target `installed`. The marker also has to
+travel *with* an entry rather than be re-derived, because a path repair changes the command string
+by definition: ownership decided from the command cannot survive the operation the installer exists
+to perform.
+
+**The one divergence from the sibling, and it is about release history rather than about the two
+products.** There the marker key is the sole test of ownership, because no release of that tool had
+ever written a hook and an unmarked entry is therefore necessarily a user's. Here every release up
+to 0.5.1 wrote an unmarked one, so the same rule would append a *second* hook beside it on every
+machine that had followed the README — manufacturing exactly the duplicate the scan fix below
+exists to collapse. So `_is_unmarked_own_entry` adopts an unmarked entry, in the one shape those
+releases could produce: `Path(command).name in BINARY_NAMES`, which is `current_executable()`'s
+whole output and nothing else. Every wrapper shape fails it — a prefix or another interpreter
+leaves extra tokens in the string, and a wrapper script has its own basename. Adoption is one-way
+and happens
+once; the entry gains the marker on that install and is matched by it forever after. Delete this
+rule only when no installation predating the marker can plausibly remain.
+
+**The scan covers every group and every entry, and collapses the extras.** It used to `return` at
+the first managed entry, so an already-correct first entry ended it and a second one pointing at a
+dead path was never repaired — while every later `setup hooks` reported the target `current`, which
+is the opposite of what `setup --help` and the README promise about repairing a path after a move.
+Two entries are ordinary: a restored backup, a hand repair, a partial earlier install. `changed`
+therefore accumulates across the whole sweep instead of deciding the return at the first hit.
+
+**`compute_codex_config_update` rewrites the `hooks` key whatever its value, and returns a
+`problem` when it cannot.** Recognising only a bare `hooks = true|false` let `hooks = "true"` and
+`hooks = 1` fall through to the append at the end, which wrote a *second* `hooks` key into the same
+table — a duplicate key, which TOML rejects outright. The tool broke the config it was configuring
+while exiting 0 and reporting `installed`, and the damage surfaced the next time Codex started
+rather than in any output this tool produced. `[[features]]` is the case where there is no correct
+edit at all — a key beside an array of tables lands inside one element and enables nothing, and a
+`[features]` table declared beside it is refused — so the third element of the return carries a
+refusal and `_install_codex_features` reports `skipped` with the file byte-identical. A target that
+only looks installed is the failure this whole section is about.
+
+**The hook runs `ha-axi context`, never the bare executable, and the reason is an exit code.** The
+no-argument home view is live state: it needs a credential, opens a connection, prints the
+installation's address, and reports `NOT_CONFIGURED` with exit **1** when nothing is set. That is
+the right answer to "show me this installation" and the wrong thing to run at session start, because
+it fails for exactly the machine ambient context exists to reach — the one that has the package and
+has never been pointed at Home Assistant — and a harness is entitled to drop a non-zero hook's
+output rather than put it in front of the agent. It also pays a round-trip and prints an address on
+every session, into a channel that is logged and transcribed.
+
+**The taxonomy did not move, and that is the whole shape of the fix.** `ha-axi` with nothing
+configured still reports `NOT_CONFIGURED` and still exits 1, because a caller who asked for live
+state and cannot have it *has* met a `config` fault. `context` asks a different question — describe
+this installation without connecting to it — so it gets a different answer rather than a softened
+one. Softening the home view would have made every script and every `doctor`-as-a-gate downstream
+stop being able to tell configured from not. Only the hook path changed.
+
+**What `context` may cost, and what it may say.** It loads on every session, so
+`CONTEXT_BUDGET_BYTES` in `tests/test_hooks.py` asserts the ceiling rather than intending it: a line
+added without thinking about the cost fails there instead of being paid forever by everybody who
+installed the hook. Two content rules fall out of the same place it is printed. It reports *which*
+variables are set and never what they hold, because hook output is a wider surface than a terminal
+rather than a narrower one. And every scalar in it is written without a colon, a comma or a bracket
+— the document is TOON, which quotes a scalar holding any of those, and a pair of quotes on a line
+of prose is noise bought at the start of every session; this is the same rule `home.DESCRIPTION` is
+held to, and `test_the_context_document_never_pays_for_a_quoted_scalar` is what keeps it.
+
+**The two views are not redundant and the split is the point.** `context` is what an agent is *told*
+at session start, from the environment alone; the home view is what an agent *asks* once it has a
+reason to. A fact that needs a connection belongs in the home view and nowhere near this one.
 
 ## The command contract
 
@@ -640,7 +723,7 @@ one, but it is an integration's claim about itself and the two can disagree, whi
 reason `--no-check` exists.
 
 **Do not generate commands from the service model.** At this scale it would mean 77 nouns and ~327
-subcommands where there are 10 and 19, roughly 30× the `--help` budget, `light turn_on` colliding
+subcommands where there are 11 and 21, roughly 30× the `--help` budget, `light turn_on` colliding
 with `service call light.turn_on` for every service, and 19 flags on one subcommand of which 17 are
 conditional on capabilities nothing checks. Consuming the same model to *validate, explain and
 recover* has none of those costs and is what `axi_toolkit.ha.services` is for.
@@ -675,8 +758,10 @@ own change with its own argument.
 not inferable; see "The read-only gate" above.
 
 **Demotion, and the standing cap.** If a typed command's body reduces to flag-mapping plus a
-request, delete it — the measure is the diff, not the intention. Ten nouns fit in a root help block
-an agent reads in one glance; an eleventh has to argue that it earns its line. `--data key=value`
+request, delete it — the measure is the diff, not the intention. Eleven nouns fit in a root help
+block an agent reads in one glance; a twelfth has to argue that it earns its line. `context` earned
+its own by being the thing a hook can safely run, which no existing noun was — see "The session-hook
+installer". `--data key=value`
 stays first-class in every case, because it reaches every field of every service forever with no
 metadata to go stale.
 
@@ -730,10 +815,10 @@ blocks mutate the installation: the first one places `light.example_lamp` in `Ex
   Nothing else is substituted, and nothing else should be.
 
 **A comma in `home.DESCRIPTION` costs a pair of quotes on every session start.** The home view is
-TOON, so a scalar containing the delimiter is quoted — the description is printed by `setup hooks`
-into every agent session, and `description: "…"` there is noise for no gain. Write it without
-commas. The same string is the root `--help` description line and the `SKILL.md` body, neither of
-which quotes, so the constraint comes from the one reader that does.
+TOON, so a scalar containing the delimiter is quoted — the description is printed into every agent
+session by the `context` document the hook runs, and `description: "…"` there is noise for no gain.
+Write it without commas. The same string is the root `--help` description line and the `SKILL.md`
+body, neither of which quotes, so the constraint comes from the one reader that does.
 
 ## Build, test, lint
 

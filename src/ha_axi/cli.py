@@ -10,6 +10,7 @@ from . import config as config_module
 from .argspec import GLOBAL_FLAGS, Command, invocation, parse, render_command_help
 from .commands import api as api_command
 from .commands import area as area_command
+from .commands import context as context_command
 from .commands import device as device_command
 from .commands import doctor as doctor_command
 from .commands import entity as entity_command
@@ -36,6 +37,7 @@ COMMAND_ORDER = (
     "api",
     "doctor",
     "setup",
+    "context",
 )
 
 _MODULES = {
@@ -49,6 +51,7 @@ _MODULES = {
     "api": api_command,
     "doctor": doctor_command,
     "setup": setup_command,
+    "context": context_command,
     "home": home_command,
 }
 

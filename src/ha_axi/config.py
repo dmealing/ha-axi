@@ -82,8 +82,7 @@ def split_userinfo(netloc: str) -> tuple:
 
     Credentials in a URL are never sent by this tool -- Home Assistant
     authenticates with the bearer token -- but they must not survive into the
-    base URL either, because the no-argument home view prints it and that view
-    is what `setup hooks` runs into every agent session.
+    base URL either, because the no-argument home view prints it.
     """
     if "@" not in netloc:
         return "", netloc
