@@ -801,10 +801,11 @@ personal workstation, so a pull-request trigger would give any contributor code 
 ## Releasing
 
 Version bumps and the changelog are driven from conventional commits by
-[release-please](https://github.com/googleapis/release-please), which opens a release PR on every
-push to `main`. Merging that PR builds the distribution, smoke-tests the built wheel, and publishes
-to PyPI through [trusted publishing](https://docs.pypi.org/trusted-publishers/) — an OIDC exchange,
-so **no long-lived PyPI token exists in this repository or anywhere else**.
+[release-please](https://github.com/googleapis/release-please), which opens a release PR when a
+push to `main` carries user-facing commits. Merging that PR builds the distribution, smoke-tests
+the built wheel, and publishes to PyPI through
+[trusted publishing](https://docs.pypi.org/trusted-publishers/) — an OIDC exchange, so **no
+long-lived PyPI token exists in this repository or anywhere else**.
 
 Trusted publishing requires a one-time configuration on PyPI by the repository owner (project
 `ha-axi`, owner `dmealing`, workflow `release.yml`, environment `pypi`) before the first publish
