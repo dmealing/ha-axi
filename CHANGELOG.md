@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/dmealing/ha-axi/compare/v0.7.0...v0.7.1) (2026-08-29)
+
+
+### Documentation
+
+* **releasing:** record why a non-user-facing commit cuts no release and how to force one ([#32](https://github.com/dmealing/ha-axi/issues/32)) ([4d78ff9](https://github.com/dmealing/ha-axi/commit/4d78ff93c25acdd9ac5204a691b218b3d917b8df))
+
 ## [0.7.0](https://github.com/dmealing/ha-axi/compare/v0.6.0...v0.7.0) (2026-08-29)
 
 
