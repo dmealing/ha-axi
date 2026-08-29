@@ -246,9 +246,15 @@ uvx ha-axi entity list --area 'Example Room'
 From a checkout:
 
 ```sh
-pip install -e ".[dev]"
+scripts/dev-setup.sh       # creates .venv and installs this checkout into it
 scripts/install-hooks.sh   # point core.hooksPath at .githooks
 ```
+
+`ha-axi` is normally installed as an isolated user-level tool with its own launcher on `PATH`, and
+an editable install into whatever interpreter happens to be ambient overwrites that launcher and
+points it at the checkout — so deleting the checkout leaves the reader's own installation dead.
+`dev-setup.sh` builds `.venv` instead, the environment `.github/workflows/ci.yml` already uses, and
+every development command runs out of it: `.venv/bin/pytest`, `.venv/bin/ruff`, `.venv/bin/ha-axi`.
 
 ## Configure
 
@@ -720,9 +726,9 @@ works does not itself trip it.
 ## Testing
 
 ```sh
-pip install -e ".[dev]"
-pytest
-ruff check . && ruff format --check .
+scripts/dev-setup.sh                    # creates .venv; see Install for why it is not a bare install
+.venv/bin/pytest
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
 **No live installation and no live token are needed, which is the point.** The suite runs against
