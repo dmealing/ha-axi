@@ -311,11 +311,40 @@ class WsClient:
 
     Used as a context manager so one connection serves several commands, which
     matters because the auth handshake costs a round trip.
+
+    **One WebSocket connection, held open by entering it.** This project
+    declares ``websockets>=13.0`` and supports four Pythons, so one call has to
+    be correct against every release that range resolves to. Only one form is:
+    *enter the object* ``websockets.sync.client.connect()`` returns, rather
+    than assigning it.
+
+    - Through 16.x, ``connect()`` returns a ``ClientConnection`` and entering
+      it returns that same object -- ``Connection.__enter__`` is ``return
+      self``.
+    - 17.1 still returns the connection, but marks it, and the first ``send``
+      or ``recv`` on an unentered one raises a ``DeprecationWarning`` naming
+      ``legacy=True``. Entering it clears the mark.
+    - When upstream flips that default, ``connect()`` returns a ``reconnect``
+      whose ``__enter__`` performs the connection and returns it. Entering is
+      then the only form that yields something with ``send`` and ``recv`` at
+      all.
+
+    ``legacy=True`` is *not* the portable answer: the parameter does not exist
+    before 17.1, where it reaches ``socket.create_connection()`` through
+    ``**kwargs`` and raises ``TypeError: create_connection() got an unexpected
+    keyword argument 'legacy'``. Entering needs no version check, so there is
+    no shim here to go stale.
+
+    The connection outlives the call that opens it, so the entered context is
+    held in an :class:`~contextlib.ExitStack` and unwound by :meth:`close`,
+    which keeps the lifetime property the comment in :meth:`connect` names: a
+    failure after the socket is open still closes it.
     """
 
     def __init__(self, config: Config) -> None:
         self.config = config
         self._socket: Any = None
+        self._open: contextlib.ExitStack | None = None
         self._next_id = 1
         self.ha_version = ""
 
@@ -340,15 +369,25 @@ class WsClient:
 
         url = self.config.ws_url
         debug(f"websocket connect {url}")
+        # `connect()` is *entered*, never assigned. Assigning it is the one
+        # form that does not span the declared `websockets` range: see "One
+        # WebSocket connection, held open by entering it" above. `ExitStack`
+        # is what holds the entered connection open past this method, since a
+        # `with` block would close it on the way out of the very call that
+        # opened it.
+        opening = contextlib.ExitStack()
         try:
-            self._socket = connect(
-                url,
-                open_timeout=self.config.timeout,
-                close_timeout=self.config.timeout,
-                max_size=MAX_FRAME_BYTES,
+            self._socket = opening.enter_context(
+                connect(
+                    url,
+                    open_timeout=self.config.timeout,
+                    close_timeout=self.config.timeout,
+                    max_size=MAX_FRAME_BYTES,
+                )
             )
         except Exception as exc:
             raise _connect_error(exc) from None
+        self._open = opening
         try:
             self._authenticate()
         except Exception:
@@ -358,10 +397,14 @@ class WsClient:
             raise
 
     def close(self) -> None:
-        if self._socket is not None:
+        if self._open is not None:
             with contextlib.suppress(Exception):
-                self._socket.close()
-            self._socket = None
+                # Unwinds to the connection's own `__exit__`, which is what
+                # closes the socket -- the same call the old direct
+                # `self._socket.close()` made, reached the supported way.
+                self._open.close()
+            self._open = None
+        self._socket = None
 
     # ------------------------------------------------------------- handshake
 
