@@ -548,6 +548,13 @@ Installs a `SessionStart` hook for Claude Code (`~/.claude/settings.json`) and C
 OpenCode. It is idempotent, repairs the recorded path after a reinstall or a move, and refuses to
 overwrite a plugin it does not manage.
 
+It owns exactly one entry, and knows which one by a `managed_by` key it writes into that entry — not
+by the command naming this tool. A `SessionStart` hook you wrote yourself is left alone however it
+reaches this tool: an environment prefix, another interpreter, a shell wrapper. An entry written by
+a release before that key existed is adopted once, in the one shape those releases could produce —
+the executable and nothing else — so upgrading repairs the hook you already have rather than adding
+a second beside it.
+
 What that hook puts in front of a session is the no-argument view, which is live state rather than
 a manual — so an agent starts knowing what is actually there:
 
@@ -707,7 +714,10 @@ Covered by tests:
 - the leak scanner adversarially: every rule against the shape it claims, every rule against
   content that must not trip it, the split/concatenated/percent-encoded evasions, the scoped allow
   marker, and both git hooks end to end through a real `git commit`;
-- hook installation: idempotency, path repair, atomic writes, and leaving other tools' hooks alone.
+- hook installation: idempotency, path repair, atomic writes, leaving other tools' *and the
+  user's own* hooks alone, collapsing a duplicate managed entry wherever it sits, and every value
+  the Codex features flag can already hold — including the ones that used to make the tool append a
+  duplicate TOML key its parser refuses.
 
 **Would need a live installation to confirm:** that a real Home Assistant accepts the exact request
 bodies built here — `config/entity_registry/update` field names, `return_response` behaviour, and

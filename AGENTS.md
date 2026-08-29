@@ -621,6 +621,63 @@ refused live and both worked again with the variable unset; the area registry wa
 and after to prove the refused create reached nothing. The recipe is the one in "Build, test, lint"
 below — credentials fetched per command, never stored — and the suite itself stays offline.
 
+## The session-hook installer
+
+`hooks.py` writes into three files nobody in this project owns: the user's `~/.claude/settings.json`,
+their `~/.codex/config.toml`, and an OpenCode plugin directory. That is what makes its failure mode
+different from every other module here — a mistake does not produce a wrong answer, it damages a
+file the user has to repair by hand — and all three rules below were paid for by a defect that
+shipped in 0.5.1 and was found in the sibling AXI CLI, which had been given this design to port.
+
+**Ownership is a key this installer writes, never a substring of the command.** An entry it wrote
+carries `managed_by: ha-axi`, and `_managed_hook` is the single construction site so what is written
+and what is claimed cannot drift. Matching `"ha-axi" in command` claimed hooks this tool never wrote
+— a user's `env HA_URL=… ha-axi`, another interpreter, a shell wrapper — and silently rewrote them
+out of the user's own global settings while reporting the target `installed`. The marker also has to
+travel *with* an entry rather than be re-derived, because a path repair changes the command string
+by definition: ownership decided from the command cannot survive the operation the installer exists
+to perform.
+
+**The one divergence from the sibling, and it is about release history rather than about the two
+products.** There the marker key is the sole test of ownership, because no release of that tool had
+ever written a hook and an unmarked entry is therefore necessarily a user's. Here every release up
+to 0.5.1 wrote an unmarked one, so the same rule would append a *second* hook beside it on every
+machine that had followed the README — manufacturing exactly the duplicate the scan fix below
+exists to collapse. So `_is_unmarked_own_entry` adopts an unmarked entry, in the one shape those
+releases could produce: `Path(command).name in BINARY_NAMES`, which is `current_command()`'s whole
+output and nothing else. Every wrapper shape fails it — a prefix or another interpreter leaves extra
+tokens in the string, and a wrapper script has its own basename. Adoption is one-way and happens
+once; the entry gains the marker on that install and is matched by it forever after. Delete this
+rule only when no installation predating the marker can plausibly remain.
+
+**The scan covers every group and every entry, and collapses the extras.** It used to `return` at
+the first managed entry, so an already-correct first entry ended it and a second one pointing at a
+dead path was never repaired — while every later `setup hooks` reported the target `current`, which
+is the opposite of what `setup --help` and the README promise about repairing a path after a move.
+Two entries are ordinary: a restored backup, a hand repair, a partial earlier install. `changed`
+therefore accumulates across the whole sweep instead of deciding the return at the first hit.
+
+**`compute_codex_config_update` rewrites the `hooks` key whatever its value, and returns a
+`problem` when it cannot.** Recognising only a bare `hooks = true|false` let `hooks = "true"` and
+`hooks = 1` fall through to the append at the end, which wrote a *second* `hooks` key into the same
+table — a duplicate key, which TOML rejects outright. The tool broke the config it was configuring
+while exiting 0 and reporting `installed`, and the damage surfaced the next time Codex started
+rather than in any output this tool produced. `[[features]]` is the case where there is no correct
+edit at all — a key beside an array of tables lands inside one element and enables nothing, and a
+`[features]` table declared beside it is refused — so the third element of the return carries a
+refusal and `_install_codex_features` reports `skipped` with the file byte-identical. A target that
+only looks installed is the failure this whole section is about.
+
+**The hook runs the bare executable, which is this tool's answer and not the sibling's.** There the
+hook runs a dedicated non-connecting subcommand, because that tool's no-argument view needs a
+credential, opens a connection and prints the server's address. Here the no-argument home view *is*
+what the hook prints, and the README documents it that way. One consequence is worth knowing before
+anybody calls it a bug: with no `HA_URL`/`HA_TOKEN` the view prints its `NOT_CONFIGURED` document —
+useful, and leaking neither value — and exits **1**, because that is what the error taxonomy gives
+every `config` fault. `test_the_installed_hook_is_useful_and_leaks_nothing_with_no_credentials` pins
+all of it, exit code included. Changing that means choosing between contradicting the taxonomy and
+adding a subcommand, which is a decision of its own and not a defect fix.
+
 ## The command contract
 
 `ha-axi` reaches every service through `service call` and every WebSocket type through `ws --raw`.

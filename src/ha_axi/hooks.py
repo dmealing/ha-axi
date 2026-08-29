@@ -20,6 +20,15 @@ from pathlib import Path
 
 MARKER = "ha-axi"
 BINARY_NAMES = ("ha-axi",)
+
+#: The key that marks a JSON hook entry as one this installer wrote, read back by
+#: exact equality on its value. Deliberately not a substring of the command: a
+#: user's own entry that merely names this tool -- an environment prefix, another
+#: interpreter, a shell wrapper -- is theirs, and an installer that claimed every
+#: hook mentioning its own name would rewrite the wrapper out of their own
+#: settings and report the target ``installed``.
+MANAGED_KEY = "managed_by"
+
 DEFAULT_TIMEOUT_SECONDS = 10
 OPENCODE_MANAGED_PREFIX = "ha-axi managed opencode plugin:"
 
@@ -59,8 +68,6 @@ def portable_command(exec_path: str, path_entries: list | None = None) -> str:
     if entries is None:
         entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
     for name in BINARY_NAMES:
-        if MARKER not in name:
-            continue
         for directory in entries:
             candidate = Path(directory) / name
             try:
@@ -86,15 +93,63 @@ def current_command() -> str:
 # ------------------------------------------------------------- JSON settings
 
 
+def _managed_hook(command: str, timeout: int) -> dict:
+    """The one construction site for a JSON hook entry this tool owns.
+
+    Every entry written here carries the marker key and no entry written from
+    now on is recognized as ours without it, so what is written and what is
+    claimed cannot drift apart. The marker travels with an entry through a path
+    repair, which is why ownership cannot be decided from the command string: a
+    moved executable's stale entry is by definition a different string.
+    """
+    return {"type": "command", "command": command, "timeout": timeout, MANAGED_KEY: MARKER}
+
+
+def _is_marked(hook) -> bool:
+    return isinstance(hook, dict) and hook.get(MANAGED_KEY) == MARKER
+
+
+def _is_unmarked_own_entry(hook) -> bool:
+    """An entry a release before the marker existed wrote, and nothing else.
+
+    **This is the one place this installer diverges from the sibling's, and the
+    reason is that this tool shipped its hook first.** The sibling could make the
+    marker key the sole test of ownership because no release of it had ever
+    written a hook, so an unmarked entry there is necessarily a user's. Here
+    every install up to 0.5.1 wrote an unmarked entry, so the same rule would
+    append a second one beside it on the next `ha-axi setup hooks` -- manufacturing
+    exactly the duplicate :func:`compute_hook_update` now collapses, on every
+    machine that had already followed the README.
+
+    So an unmarked entry is adopted, but only in the exact shape those releases
+    could produce: the command is the executable and nothing else, which is what
+    :func:`current_command` returns. A wrapper is more than that -- ``env
+    HA_URL=... ha-axi``, ``bash -c ...``, ``~/bin/ha-axi-wrapper.sh`` -- and
+    keeps its own basename or its own extra tokens either way, so none of them
+    answers to this. Adoption is one-way and happens once: the entry gains the
+    marker on that install and is matched by it forever after.
+    """
+    if not isinstance(hook, dict) or MANAGED_KEY in hook:
+        return False
+    command = str(hook.get("command", "")).strip()
+    return bool(command) and Path(command).name in BINARY_NAMES
+
+
 def _is_managed(hook) -> bool:
-    return isinstance(hook, dict) and MARKER in str(hook.get("command", ""))
+    return _is_marked(hook) or _is_unmarked_own_entry(hook)
 
 
 def compute_hook_update(settings: dict, command: str, timeout: int) -> tuple:
     """Return ``(settings, changed)`` with this tool's SessionStart hook current.
 
     Repeat installs with an unchanged path are silent no-ops; a changed path is
-    repaired in place rather than duplicated.
+    repaired in place rather than duplicated. The scan covers every group rather
+    than stopping at the first managed entry, and every managed entry beyond the
+    first is collapsed: settings restored from a backup, repaired by hand, or
+    left by a partial earlier install can hold two, and the stale one has to give
+    way whichever position it sits in. Stopping early reported the target
+    ``current`` while a dead path stayed in the file, which is the opposite of
+    what `setup --help` and the README promise about repairing after a move.
     """
     updated = json.loads(json.dumps(settings)) if settings else {}
     changed = False
@@ -121,40 +176,68 @@ def compute_hook_update(settings: dict, command: str, timeout: int) -> tuple:
         hooks["SessionStart"] = groups
         changed = True
 
-    for group in groups:
+    have_managed = False
+    for group in list(groups):
         if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
             continue
+        kept_hooks = []
         for hook in group["hooks"]:
             if not _is_managed(hook):
+                kept_hooks.append(hook)
                 continue
+            if have_managed:
+                changed = True
+                continue
+            have_managed = True
+            # The marker is part of being current: an entry adopted from a
+            # release that predates it is otherwise identical and still has to
+            # be written back, or it would be adopted again on every install.
             correct = (
-                hook.get("command") == command
+                hook.get(MANAGED_KEY) == MARKER
+                and hook.get("command") == command
                 and hook.get("type") == "command"
                 and hook.get("timeout") == timeout
             )
-            if correct and not changed:
-                return settings, False
-            hook["command"] = command
-            hook["type"] = "command"
-            hook["timeout"] = timeout
-            return updated, True
+            if not correct:
+                hook.update(_managed_hook(command, timeout))
+                changed = True
+            kept_hooks.append(hook)
+        if kept_hooks != group["hooks"]:
+            group["hooks"] = kept_hooks
+            if not kept_hooks:
+                groups.remove(group)
 
-    groups.append(
-        {"matcher": "", "hooks": [{"type": "command", "command": command, "timeout": timeout}]}
-    )
-    return updated, True
+    if not have_managed:
+        groups.append({"matcher": "", "hooks": [_managed_hook(command, timeout)]})
+        return updated, True
+    return (updated, True) if changed else (settings, False)
 
 
 def compute_codex_config_update(content: str) -> tuple:
-    """Ensure Codex has ``[features] hooks = true`` without disturbing the rest."""
+    """Ensure Codex has ``[features] hooks = true`` without disturbing the rest.
+
+    Returns ``(content, changed, problem)``. Any existing ``hooks`` key in the
+    features table is *rewritten*, whatever its value: recognizing only the bare
+    booleans left ``hooks = "true"`` and ``hooks = 1`` falling through to the
+    append at the end, which wrote a second ``hooks`` key into the same table.
+    That is a duplicate key, which TOML rejects outright -- so the tool broke the
+    config it was configuring while exiting 0 and reporting ``installed``.
+
+    ``problem`` is set when the config cannot carry the flag at all: a
+    ``[[features]]`` array of tables is not the features table -- a key written
+    beside it lands inside one array element and enables nothing, and a
+    ``[features]`` table appended beside it is a declaration TOML refuses -- so
+    the caller reports a refusal rather than a target that only looks installed.
+    """
     newline = "\r\n" if "\r\n" in content else "\n"
     if not content.strip():
-        return f"[features]{newline}hooks = true{newline}", True
+        return f"[features]{newline}hooks = true{newline}", True, None
 
     lines = content.split("\n")
     lines = [line.rstrip("\r") for line in lines]
     in_features = False
     saw_features = False
+    saw_features_array = False
 
     for index, line in enumerate(lines):
         section = re.match(r"^\s*(\[{1,2})([^\]]+)(\]{1,2})\s*(?:#.*)?$", line)
@@ -164,25 +247,34 @@ def compute_codex_config_update(content: str) -> tuple:
                 continue
             if in_features:
                 lines.insert(index, "hooks = true")
-                return newline.join(lines), True
-            in_features = name == "features"
-            saw_features = saw_features or in_features
+                return newline.join(lines), True, None
+            if name == "features":
+                if len(opener) == 1:
+                    in_features = True
+                    saw_features = True
+                else:
+                    saw_features_array = True
             continue
         if not in_features:
             continue
-        flag = re.match(r"^\s*hooks\s*=\s*(true|false)\s*(?:#.*)?$", line)
-        if not flag:
-            continue
-        if flag.group(1) == "true":
-            return content, False
-        lines[index] = line.replace("false", "true", 1)
-        return newline.join(lines), True
+        if re.match(r"^\s*hooks\s*=\s*true\s*(?:#.*)?$", line):
+            return content, False, None
+        if re.match(r"^\s*hooks\s*=", line):
+            lines[index] = "hooks = true"
+            return newline.join(lines), True, None
 
     if saw_features:
         suffix = "" if content.endswith(newline) else newline
-        return f"{content}{suffix}hooks = true{newline}", True
+        return f"{content}{suffix}hooks = true{newline}", True, None
+    if saw_features_array:
+        return (
+            content,
+            False,
+            "`[features]` is an array of tables here; rewrite it as a `[features]` "
+            "table and install again",
+        )
     separator = newline if content.endswith(newline) else newline * 2
-    return f"{content}{separator}[features]{newline}hooks = true{newline}", True
+    return f"{content}{separator}[features]{newline}hooks = true{newline}", True, None
 
 
 # ------------------------------------------------------------------ OpenCode
@@ -305,7 +397,10 @@ def _install_codex_features(path: Path, report: dict) -> dict:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         current = path.read_text(encoding="utf-8") if path.exists() else ""
-        updated, changed = compute_codex_config_update(current)
+        updated, changed, problem = compute_codex_config_update(current)
+        if problem is not None:
+            report["errors"].append(f"{path}: {problem}")
+            return {"target": "codex-features", "status": "skipped"}
         if changed:
             write_atomic(path, updated)
         return {"target": "codex-features", "status": "installed" if changed else "current"}
