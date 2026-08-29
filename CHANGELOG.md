@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.1](https://github.com/dmealing/ha-axi/compare/v0.5.0...v0.5.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **ws:** enter the websockets connection instead of assigning it ([#25](https://github.com/dmealing/ha-axi/issues/25)) ([bb2593a](https://github.com/dmealing/ha-axi/commit/bb2593a59d67bfc8409f6c37b6b86c5cbda19514))
+
+
+### Dependencies
+
+* **axi-toolkit:** now a runtime dependency alongside `websockets` ([#24](https://github.com/dmealing/ha-axi/issues/24)) ([12fbc6f](https://github.com/dmealing/ha-axi/commit/12fbc6fbdf586eecd74e2baf42ab19666d88eb86)). It is where the service model reader lives now, so there is one copy of it rather than two, and it declares no dependencies of its own, so the installed closure grows by exactly one.
+
 ## [0.5.0](https://github.com/dmealing/ha-axi/compare/v0.4.0...v0.5.0) (2026-08-23)
 
 
