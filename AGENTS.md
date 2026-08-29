@@ -354,6 +354,53 @@ this dependency, not something to absorb quietly.
   which the REST-only path cannot supply. If that read fails, the report says so and the exit code
   stays 0: the call itself was accepted, and turning it into an error would be a fresh untruth.
 
+### The `websockets` API span, and why the floor is unbounded on purpose
+
+`websockets` is the only runtime dependency, it makes breaking API changes, and the declared range
+is `>=13.0` with no ceiling. That combination is safe **only** because the one call into it is
+written in the form the library supports across the whole range, and it is worth writing down what
+that form is, because the obvious spelling is the wrong one.
+
+**`connect()` is entered, never assigned.** `WsClient.connect` holds the entered context in a
+`contextlib.ExitStack` that `close()` unwinds, because the connection has to outlive the call that
+opens it — a `with` block would close it on the way out. The three states of the library:
+
+| release | what `connect()` returns | assigning it |
+| --- | --- | --- |
+| 13.0 – 16.x | the `ClientConnection`; `__enter__` is `return self` | works |
+| 17.1 | the `ClientConnection`, marked | `DeprecationWarning` on the first `send`/`recv` |
+| after the flip | a `reconnect`; `__enter__` connects and returns the connection | no `send`/`recv` at all |
+
+Entering is correct in all three, so there is no version sniff and no `try`/`except` here to go
+stale. **`legacy=True` is not the portable answer** — the parameter does not exist before 17.1,
+where it reaches `socket.create_connection()` through `**kwargs` and raises `TypeError:
+create_connection() got an unexpected keyword argument 'legacy'`. And **no upper bound was added**:
+a cap would pin every user behind current `websockets` to solve a problem the call form already
+solves, and the forward claim is measured rather than promised —
+`test_the_client_works_against_the_future_websockets_api` asks the real 17.1 library for
+`legacy=False`, which *is* the post-flip behaviour, and drives a real command through it.
+`test_the_connection_is_entered_and_not_merely_assigned` states the same rule without naming a
+version, so it guards the class of defect on every release including the ones that predate it.
+
+**Why only two legs of the matrix went red, and why that is the confusing part.** `websockets` 17.0,
+17.0.1 and 17.1 wheels declare `requires-python >=3.11`. A Python 3.9 or 3.10 leg therefore resolves
+16.1.1 and cannot see the change at all, so the failure presents as "3.11 and 3.12 are broken",
+which reads like a Python incompatibility and is not one. Before concluding anything about a version
+of Python from this matrix, print the resolved dependency on each leg. For the same reason a local
+run on one interpreter proves nothing here: the four legs resolve two different libraries.
+
+**The nightly and `filterwarnings` are the early-warning system, and they earned their keep.** The
+nightly `schedule` in `ci.yml` re-runs the matrix against freshly resolved dependencies on an
+unchanged commit, and `filterwarnings = ["error::DeprecationWarning:ha_axi.*"]` in `pyproject.toml`
+promotes a deprecation raised *through this package* into a failure. Together they converted a
+future hard break into a red build on the day upstream published, on a commit that had not changed —
+which is the signature to look for: **green then red on the same SHA is an external release, not a
+regression.** Do not relax that filter to quiet a third-party deprecation; it is scoped to
+`ha_axi.*` precisely so it stays sensitive without being fragile. Note also what it does *not* mean:
+a `DeprecationWarning` is ignored by Python's default filters, so the released CLI kept working for
+ordinary users while the suite was red. The suite failing is the point — it is the notice, not the
+outage.
+
 ## The error taxonomy
 
 Every failure carries a `code` and a `class`. The code names the one thing that went wrong; the

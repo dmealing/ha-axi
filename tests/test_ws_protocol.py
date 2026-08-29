@@ -149,3 +149,129 @@ def test_closing_twice_is_harmless(ws_server):
     client.close()
     client.close()
     assert client._socket is None
+
+
+# ---------------------------------------------------------------------------
+# The `websockets` API span. See `WsClient`'s docstring for the whole rule; the
+# short version is that `connect()` must be *entered*, never assigned, because
+# that is the only form correct across the declared `websockets>=13.0` range.
+# 17.1 deprecated assigning it (and 17.1 wheels are Python >=3.11, which is why
+# only the 3.11 and 3.12 legs of the matrix ever saw it), and a later release
+# turns the deprecation into a different return type altogether.
+# ---------------------------------------------------------------------------
+
+
+def test_the_connection_is_entered_and_not_merely_assigned(ws_server, monkeypatch):
+    """The defect itself, stated without reference to any `websockets` version.
+
+    A release where `connect()` returns a context manager that is *not* the
+    connection is exactly what 17.1 announced. Assigning the return value keeps
+    hold of the wrapper, so this pins that the client keeps hold of what
+    entering it yielded.
+    """
+    import websockets.sync.client as sync_client
+
+    real_connect = sync_client.connect
+    entered = []
+
+    class Wrapper:
+        """A context manager that is deliberately not its own connection."""
+
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            # Delegates, the way the real future `reconnect.__enter__` does:
+            # the point is that the wrapper is not the connection, not that
+            # entering it skips the library's own setup.
+            connection = self._connection.__enter__()
+            entered.append(connection)
+            return connection
+
+        def __exit__(self, *exc_info):
+            return self._connection.__exit__(*exc_info)
+
+    monkeypatch.setattr(
+        sync_client, "connect", lambda *args, **kwargs: Wrapper(real_connect(*args, **kwargs))
+    )
+
+    client = client_for(ws_server)
+    try:
+        assert client.run("area.list") is not None
+        assert entered, "connect()'s return value was never entered"
+        assert client._socket is entered[0]
+        assert not isinstance(client._socket, Wrapper)
+    finally:
+        client.close()
+    assert client._socket is None
+
+
+def test_the_websockets_client_is_driven_without_deprecation(ws_server):
+    """No `DeprecationWarning` reaches a caller from an ordinary command.
+
+    This is the failure as the matrix met it: 17.1 warns on the first `send` or
+    `recv` of a connection that was never entered, and this project promotes
+    that warning to an error, so every WebSocket test reported `WS_CLOSED`.
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with client_for(ws_server) as client:
+            assert client.run("area.list") is not None
+
+
+def test_the_client_works_against_the_future_websockets_api(ws_server, monkeypatch):
+    """Not a mock: the real library, asked for the behaviour it is moving to.
+
+    17.1 ships the post-deprecation behaviour behind `legacy=False`, where
+    `connect()` returns a `reconnect` whose `__enter__` performs the connection.
+    Running the real client against it now is what makes the forward-compatible
+    claim a measurement rather than a promise. Older releases have no such
+    parameter and nothing to prove, so they skip.
+    """
+    import inspect
+
+    import websockets.sync.client as sync_client
+
+    real_connect = sync_client.connect
+    if "legacy" not in inspect.signature(real_connect).parameters:
+        pytest.skip("this websockets release predates the `legacy` flag")
+
+    monkeypatch.setattr(
+        sync_client, "connect", lambda *args, **kwargs: real_connect(*args, legacy=False, **kwargs)
+    )
+
+    with client_for(ws_server) as client:
+        areas = client.run("area.list")
+    assert [a["area_id"] for a in areas] == ["example_room", "example_hall"]
+
+
+def test_the_socket_is_closed_when_authentication_fails_against_the_future_api(
+    ws_server, monkeypatch
+):
+    """The lifetime property, held on the return type this project has not met yet.
+
+    `__exit__` never runs when `__enter__` raises, so a failure *after* the
+    socket is open has to close it explicitly. That is what the `ExitStack`
+    holds, and it has to hold on both return types rather than only the one
+    installed here.
+    """
+    import inspect
+
+    import websockets.sync.client as sync_client
+
+    real_connect = sync_client.connect
+    if "legacy" not in inspect.signature(real_connect).parameters:
+        pytest.skip("this websockets release predates the `legacy` flag")
+
+    monkeypatch.setattr(
+        sync_client, "connect", lambda *args, **kwargs: real_connect(*args, legacy=False, **kwargs)
+    )
+
+    config = load({"HA_URL": f"http://127.0.0.1:{ws_server.port}", "HA_TOKEN": "wrong-token-value"})
+    client = WsClient(config)
+    with pytest.raises(AuthFailed):
+        client.connect()
+    assert client._socket is None
+    assert client._open is None
