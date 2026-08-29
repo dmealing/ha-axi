@@ -52,11 +52,11 @@ def run(ctx, sub: str, parsed):
     doc = {"bin": executable_path(), "description": DESCRIPTION}
     missing = missing_env_vars(ctx.environ)
     if missing:
-        # Coded like every other failure. This view is what `setup hooks` puts
-        # in front of every agent session, so it is the most-read error surface
-        # the tool has -- and until now the only one that reported a failure
-        # with no code at all, leaving the one view an agent always sees as the
-        # one it could not classify.
+        # Coded like every other failure: a caller who asked for live state and
+        # cannot have it has met a config fault, and scripts that gate on this
+        # view rely on telling configured from not. The session hook prints
+        # `ha-axi context` rather than this view, precisely because this branch
+        # exits 1 -- see `commands/context.py`.
         doc["error"] = f"{' and '.join(missing)} not set in the environment"
         doc["code"] = "NOT_CONFIGURED"
         doc["class"] = fault_class("NOT_CONFIGURED")
@@ -66,8 +66,8 @@ def run(ctx, sub: str, parsed):
 
     config = ctx.config()
     doc["url"] = config.base_url
-    # Announced only when it is on. This view loads at the start of every agent
-    # session, so an unset switch is not worth the tokens -- but an agent that
+    # Announced only when it is on, matching the `context` document the session
+    # hook prints: an unset switch is not worth the tokens, but an agent that
     # cannot see a set one plans writes it will never be allowed to make, and
     # reads the refusals as a broken installation.
     if config.read_only:
@@ -91,7 +91,7 @@ def run(ctx, sub: str, parsed):
     # can be run against either. Summing them under one label called
     # `unavailable` contradicted `state list --state unavailable` outright on any
     # installation holding an entity that has simply not reported yet -- which is
-    # most of them, and this is the view `setup hooks` puts in front of a session.
+    # most of them, and this is the live-state view an agent asks for first.
     unavailable = 0
     unknown = 0
     for state in states:

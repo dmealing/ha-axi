@@ -186,7 +186,7 @@ this dependency, not something to absorb quietly.
 - **Redirects never carry the token off-origin.** `rest._SameOriginRedirectHandler` refuses any
   redirect that changes scheme or netloc; urllib would otherwise copy `Authorization` onto it.
 - **URL userinfo is stripped in `normalize_base_url` and registered as a secret.** The no-argument
-  home view prints the base URL, and `setup hooks` runs that view into every agent session.
+  home view prints the base URL, so userinfo must not survive into it.
 - **A bare host defaults to `https://`**, never `http://`.
 - **`HA_AXI_READ_ONLY` holds at three points, and the two transports are the load-bearing ones.**
   See "The read-only gate" below. Do not move enforcement into command bodies, do not add a
@@ -347,8 +347,8 @@ this dependency, not something to absorb quietly.
   and offered help about *fields*, which were never the problem.
 - **`unavailable` and `unknown` are different facts and the home view counts them apart.** `unknown`
   means reachable and not yet reporting, which is the common one — a live instance had 12 `unknown`
-  and 0 `unavailable`. Summing them under the name of one of them made the landing view, the one
-  `setup hooks` puts in front of every session, contradict `state list --state unavailable` outright.
+  and 0 `unavailable`. Summing them under the name of one of them made the home view contradict
+  `state list --state unavailable` outright.
 - **A 404 that carries a message is not a wrong path.** aiohttp answers an unrouted path with
   plain-text `404: Not Found` and no body; a routed path whose *subject* is missing answers in JSON
   — `/states/<id>` says `Entity not found.`. `rest._http_error` quotes the message when there is one
@@ -517,10 +517,11 @@ something a caller can act on.
 ### The two views that reported a failure with no code at all
 
 `home` and `doctor` catch `AxiError` and fold it into their own document rather than letting it
-reach `cli._error_document`, so neither printed a code. `home` is the landing view `setup hooks` puts
-in front of **every** agent session — the most-read error surface the tool has, and the one that
-could not be classified. Both carry `code` and `class` now: `home` at the top level, `doctor` on the
-failing check row, which is what makes the case a reverse proxy actually produces — REST answering
+reach `cli._error_document`, so neither printed a code. `home` is the live-state view an agent asks
+for once it has a reason to — the most-read error surface the tool has, the session hook's
+`context` document being one that cannot fail — and the one that could not be classified. Both
+carry `code` and `class` now: `home` at the top level, `doctor` on the failing check row, which is
+what makes the case a reverse proxy actually produces — REST answering
 and the WebSocket upgrade refused — two readable facts instead of one unhealthy instance. A failing
 `doctor` therefore renders its `checks` block in **list** form rather than tabular, because the rows
 stop being uniform; a healthy one is still tabular and `test_doctor_still_answers_healthy_in_tabular_form`
@@ -617,8 +618,8 @@ this paragraph exists so nobody "fixes" one to match the other.
 every transport failure, because "this session forbids writes" and "that server refused you" have
 different fixes and an agent that cannot tell them apart retries the wrong one. `doctor` reports the
 mode as its first check — the only check needing neither configuration nor a connection — and the
-home view prints `read_only: on` when it is set and stays silent when it is not, because that view
-loads at the start of every session and an unset switch is not worth the tokens.
+home view and the `context` document a session hook prints both report `read_only: on` when it is
+set and stay silent when it is not, because an unset switch is not worth the tokens.
 
 **Verified against a live installation, not only against the doubles.** Both transports were
 refused live and both worked again with the variable unset; the area registry was counted before
@@ -648,9 +649,10 @@ ever written a hook and an unmarked entry is therefore necessarily a user's. Her
 to 0.5.1 wrote an unmarked one, so the same rule would append a *second* hook beside it on every
 machine that had followed the README — manufacturing exactly the duplicate the scan fix below
 exists to collapse. So `_is_unmarked_own_entry` adopts an unmarked entry, in the one shape those
-releases could produce: `Path(command).name in BINARY_NAMES`, which is `current_command()`'s whole
-output and nothing else. Every wrapper shape fails it — a prefix or another interpreter leaves extra
-tokens in the string, and a wrapper script has its own basename. Adoption is one-way and happens
+releases could produce: `Path(command).name in BINARY_NAMES`, which is `current_executable()`'s
+whole output and nothing else. Every wrapper shape fails it — a prefix or another interpreter
+leaves extra tokens in the string, and a wrapper script has its own basename. Adoption is one-way
+and happens
 once; the entry gains the marker on that install and is matched by it forever after. Delete this
 rule only when no installation predating the marker can plausibly remain.
 
@@ -721,7 +723,7 @@ one, but it is an integration's claim about itself and the two can disagree, whi
 reason `--no-check` exists.
 
 **Do not generate commands from the service model.** At this scale it would mean 77 nouns and ~327
-subcommands where there are 10 and 19, roughly 30× the `--help` budget, `light turn_on` colliding
+subcommands where there are 11 and 21, roughly 30× the `--help` budget, `light turn_on` colliding
 with `service call light.turn_on` for every service, and 19 flags on one subcommand of which 17 are
 conditional on capabilities nothing checks. Consuming the same model to *validate, explain and
 recover* has none of those costs and is what `axi_toolkit.ha.services` is for.
@@ -813,10 +815,10 @@ blocks mutate the installation: the first one places `light.example_lamp` in `Ex
   Nothing else is substituted, and nothing else should be.
 
 **A comma in `home.DESCRIPTION` costs a pair of quotes on every session start.** The home view is
-TOON, so a scalar containing the delimiter is quoted — the description is printed by `setup hooks`
-into every agent session, and `description: "…"` there is noise for no gain. Write it without
-commas. The same string is the root `--help` description line and the `SKILL.md` body, neither of
-which quotes, so the constraint comes from the one reader that does.
+TOON, so a scalar containing the delimiter is quoted — the description is printed into every agent
+session by the `context` document the hook runs, and `description: "…"` there is noise for no gain.
+Write it without commas. The same string is the root `--help` description line and the `SKILL.md`
+body, neither of which quotes, so the constraint comes from the one reader that does.
 
 ## Build, test, lint
 
