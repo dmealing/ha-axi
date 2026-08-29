@@ -7,6 +7,13 @@
 
 * **context:** give the session hook a document it can print with nothing configured ([#27](https://github.com/dmealing/ha-axi/issues/27)) ([da22501](https://github.com/dmealing/ha-axi/commit/da225015a116c7a4e4e9c296620c9ad2791aea8d))
 
+
+### Bug Fixes
+
+* **hooks:** leave a session hook this tool did not write alone, instead of overwriting it and reporting installed ([#27](https://github.com/dmealing/ha-axi/issues/27)) ([da22501](https://github.com/dmealing/ha-axi/commit/da225015a116c7a4e4e9c296620c9ad2791aea8d))
+* **hooks:** repair every stale hook entry instead of stopping at the first one and reporting the target current ([#27](https://github.com/dmealing/ha-axi/issues/27)) ([da22501](https://github.com/dmealing/ha-axi/commit/da225015a116c7a4e4e9c296620c9ad2791aea8d))
+* **hooks:** rewrite the Codex `hooks` key whatever its value, instead of appending a duplicate one its own parser rejects ([#27](https://github.com/dmealing/ha-axi/issues/27)) ([da22501](https://github.com/dmealing/ha-axi/commit/da225015a116c7a4e4e9c296620c9ad2791aea8d))
+
 ## [0.5.1](https://github.com/dmealing/ha-axi/compare/v0.5.0...v0.5.1) (2026-08-29)
 
 
