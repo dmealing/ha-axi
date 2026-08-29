@@ -7,6 +7,11 @@
 
 * **releasing:** record why a non-user-facing commit cuts no release and how to force one ([#32](https://github.com/dmealing/ha-axi/issues/32)) ([4d78ff9](https://github.com/dmealing/ha-axi/commit/4d78ff93c25acdd9ac5204a691b218b3d917b8df))
 
+
+### Build System
+
+* **scripts:** make the documented developer setup isolated by construction ([#31](https://github.com/dmealing/ha-axi/issues/31)) ([0906f61](https://github.com/dmealing/ha-axi/commit/0906f61c28ad5e30f719b3aa1ad67e7fef96c5e0)). Setting up a checkout is `scripts/dev-setup.sh` now: it builds `.venv` and prints the `.venv/bin/<tool>` forms every development command runs out of. The block it replaces installed the checkout, editable, into whatever interpreter happened to be ambient, which overwrites the launcher of an existing isolated install of this tool and leaves it dead once the checkout is deleted, with nothing announcing it. Nothing in the shipped tool behaves differently.
+
 ## [0.7.0](https://github.com/dmealing/ha-axi/compare/v0.6.0...v0.7.0) (2026-08-29)
 
 
