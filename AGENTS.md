@@ -845,11 +845,40 @@ body, neither of which quotes, so the constraint comes from the one reader that 
 ## Build, test, lint
 
 ```sh
-pip install -e ".[dev]"
-pytest                                   # ~1020 tests, a couple of seconds
-ruff check . && ruff format --check .
-ha-axi setup skill --check               # SKILL.md is generated, never hand-edited
+scripts/dev-setup.sh                     # creates .venv and installs this checkout into it
+.venv/bin/pytest                         # ~1090 tests, a couple of seconds
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/ha-axi setup skill --check     # SKILL.md is generated, never hand-edited
 ```
+
+**Never install this checkout into an ambient interpreter, and that is why the setup is a committed
+script rather than a documented command.** This tool is normally installed as an isolated
+user-level tool — `uv tool`, `pipx`, a `--user` install — with a launcher in `~/.local/bin` and its
+own environment behind it. An editable install into whatever interpreter is on `PATH` **replaces
+that launcher** with one bound to the ambient interpreter, and leaves an editable pointer
+(`_editable_impl_ha_axi.pth`, plus a `.dist-info` whose `direct_url.json` records the checkout
+path) in the user site. Deleting the checkout is the ordinary end of a throwaway clone, and it
+leaves the reader's own installed command dead with `ModuleNotFoundError: No module named
+'ha_axi'` — and nothing announces it. It has already happened: one AXI CLI was left completely
+broken this way and a sibling was silently pinned two releases behind its published version, with
+no symptom until somebody ran them. A contributor's checkout must not be able to break the
+reader's installation of the tool they are contributing to.
+
+`scripts/dev-setup.sh` is the single entry point, and it is a script rather than a line of prose
+because a documented command is copied, edited and shortened while a script is run. It creates
+`.venv`, installs `-e ".[dev]"` into it, and prints the `.venv/bin/<tool>` forms — the same
+directory and the same invocation style `.github/workflows/ci.yml` uses for the same reason (see
+"Continuous integration" below: a venv sets `ENABLE_USER_SITE = False`, so neither a job nor a
+developer can reach the user site by accident). One pattern, two readers. `PYTHON=python3.9
+scripts/dev-setup.sh` builds it from another interpreter; re-running reuses an existing `.venv`
+rather than clearing it, which is where it deliberately differs from CI, whose workspace outlives
+the job.
+
+`tests/test_dev_setup.py` is what keeps this true: it sweeps every tracked file outside
+`.github/` and the setup script itself and fails on a bare editable install, so the next reader who
+"simplifies" the setup block back to one `pip` line fails the suite instead of the maintainer's
+machine. The cost is that the prose here cannot quote the dangerous command literally — describe
+it, the way this paragraph does.
 
 **Do not edit a vendored conformance fixture.** If one fails, the encoder is wrong until proven
 otherwise; the checksum test will catch the edit anyway. Refreshing them from upstream is its own
