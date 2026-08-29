@@ -356,10 +356,10 @@ this dependency, not something to absorb quietly.
 
 ### The `websockets` API span, and why the floor is unbounded on purpose
 
-`websockets` is the only runtime dependency, it makes breaking API changes, and the declared range
-is `>=13.0` with no ceiling. That combination is safe **only** because the one call into it is
-written in the form the library supports across the whole range, and it is worth writing down what
-that form is, because the obvious spelling is the wrong one.
+`websockets` is the only runtime dependency that carries a transport, it makes breaking API changes,
+and the declared range is `>=13.0` with no ceiling. That combination is safe **only** because the one
+call into it is written in the form the library supports across the whole range, and it is worth
+writing down what that form is, because the obvious spelling is the wrong one.
 
 **`connect()` is entered, never assigned.** `WsClient.connect` holds the entered context in a
 `contextlib.ExitStack` that `close()` unwinds, because the connection has to outlive the call that
