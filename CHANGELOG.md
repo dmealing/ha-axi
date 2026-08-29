@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/dmealing/ha-axi/compare/v0.5.0...v0.5.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **ws:** enter the websockets connection instead of assigning it ([#25](https://github.com/dmealing/ha-axi/issues/25)) ([bb2593a](https://github.com/dmealing/ha-axi/commit/bb2593a59d67bfc8409f6c37b6b86c5cbda19514))
+
 ## [0.5.0](https://github.com/dmealing/ha-axi/compare/v0.4.0...v0.5.0) (2026-08-23)
 
 
