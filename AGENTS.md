@@ -1071,13 +1071,17 @@ release-please the version is already out and it bumps past it, permanently skip
 number PyPI will never let us reuse.
 
 **A correctly typed commit can still cut no release at all, and that is the changelog sections
-working as intended.** `feat`, `fix` and a breaking change are the only types that move the version;
-a `build`, `ci`, `chore`, `docs`, `refactor` or `test` commit is parsed, counted and then bumps
-nothing, so the release workflow reports success while shipping nothing and logs that it considered
-zero commits — which reads exactly like a clean run with nothing left to do. That is right for
-almost everything, and wrong for the one case where a merged change alters what a contributor or a
-user gets while having no behaviour to describe. The lever is a `Release-As: <version>` footer, on a
-commit of its own.
+working as intended.** The distinction that matters is between types that render changelog notes
+and types that do not: a `build`, `ci`, `chore`, `refactor`, `style` or `test` commit is parsed
+and counted but renders none, the changelog comes out empty, release-please finds no user-facing
+commits and opens no release pull request, and the workflow reports success while shipping
+nothing. The release run for the `build` commit that prompted this release logged
+`Considering: 1 commits` and then `No user facing commits found since be7dae0f8840712f7b449760ba66067488b09c7d - skipping`:
+the commit was counted and then skipped as non-user-facing, the skip gated on the generated
+changelog notes coming out empty rather than on the count of commits considered, and the whole
+thing reads like a clean run with nothing left to do. That is right for almost everything, and
+wrong for the one case where a merged change alters what a contributor or a user gets while having
+no behaviour to describe. The lever is a `Release-As: <version>` footer, on a commit of its own.
 
 **No version string is touched by hand in that commit: release-please owns every one of them.**
 `pyproject.toml`, `src/ha_axi/__init__.py` and `.release-please-manifest.json` are all written by
