@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/dmealing/ha-axi/compare/v0.6.0...v0.7.0) (2026-08-29)
+
+
+### Features
+
+* **device:** add get and update subcommands ([#29](https://github.com/dmealing/ha-axi/issues/29)) ([1e7ad10](https://github.com/dmealing/ha-axi/commit/1e7ad10207a3ea7ea7a669f632a5514e4ef088d8))
+
 ## [0.6.0](https://github.com/dmealing/ha-axi/compare/v0.5.1...v0.6.0) (2026-08-29)
 
 
