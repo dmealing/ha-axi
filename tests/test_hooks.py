@@ -1,20 +1,46 @@
-"""Session-hook installation: idempotent, repairing, and never destructive.
+"""The session integration: what it installs, and what the thing it installs prints.
 
-Three of the assertions below are the sibling AXI CLI's, arrived at by a review
-of the design this module handed it, and are stated here in the same order: a
-hook this tool did not write is never claimed, a second managed entry is
-collapsed rather than ending the scan, and the Codex features flag is rewritten
-rather than duplicated into a file its own parser would refuse.
+Two halves.
+
+**Installation** is idempotent, repairing, and never destructive. Three of those
+assertions came back from the sibling AXI CLI, which was given this design to
+port and reviewed it on the way in, and they are stated here in the order that
+review found them: a hook this tool did not write is never claimed, a second
+managed entry is collapsed rather than ending the scan, and the Codex features
+flag is rewritten rather than duplicated into a file its own parser would refuse.
+
+**The document the hook prints** is the second half, and the reason it is a
+document of its own. A SessionStart hook runs on every session, on every machine
+that has the package, before anybody has decided to use the tool -- so the
+no-argument home view cannot be it: that view needs a credential, opens a
+connection, prints the installation's address, and exits **1** when nothing is
+configured, which is the state of exactly the machine ambient context exists to
+help. The claims that make `ha-axi context` safe there are asserted rather than
+described in a docstring:
+
+- it reaches Home Assistant **zero times**, asserted on the doubles' request log
+  rather than on an exit code, because a version that connected and printed the
+  same document would pass on the exit code alone;
+- it exits 0 and reports no error with **no environment at all**;
+- it prints neither the base URL nor the token when both are set;
+- and the command the installer records is the one all of that is true of, which
+  is the join between the two halves and the test worth having.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 
-from ha_axi import hooks
+import pytest
+
+from ha_axi import cli, hooks
 
 EXECUTABLE = "ha-axi"
+
+#: What a JSON hook entry records: the executable *and* the argument.
+HOOK_LINE = f"{EXECUTABLE} {hooks.CONTEXT_COMMAND}"
 
 
 def read(path):
@@ -51,7 +77,7 @@ def test_install_creates_hooks_for_every_default_target(tmp_path):
     claude = read(tmp_path / ".claude" / "settings.json")
     assert claude["hooks"]["SessionStart"][0]["hooks"][0] == {
         "type": "command",
-        "command": EXECUTABLE,
+        "command": HOOK_LINE,
         "timeout": hooks.DEFAULT_TIMEOUT_SECONDS,
         "managed_by": "ha-axi",
     }
@@ -69,7 +95,9 @@ def test_repeat_installs_with_the_same_path_are_no_ops(tmp_path):
 def test_a_changed_executable_path_is_repaired_not_duplicated(tmp_path):
     hooks.install(tmp_path, command="/old/bin/ha-axi")
     hooks.install(tmp_path, command="/new/bin/ha-axi")
-    assert commands_in(read(tmp_path / ".claude" / "settings.json")) == ["/new/bin/ha-axi"]
+    assert commands_in(read(tmp_path / ".claude" / "settings.json")) == [
+        f"/new/bin/ha-axi {hooks.CONTEXT_COMMAND}"
+    ]
 
 
 def test_a_user_hook_that_names_this_tool_is_left_alone(tmp_path):
@@ -91,7 +119,7 @@ def test_a_user_hook_that_names_this_tool_is_left_alone(tmp_path):
         },
     )
     hooks.install(tmp_path, command=EXECUTABLE)
-    assert commands_in(read(settings)) == [wrapper, EXECUTABLE]
+    assert commands_in(read(settings)) == [wrapper, HOOK_LINE]
 
 
 def test_a_shell_wrapper_and_another_interpreter_are_left_alone_too(tmp_path):
@@ -111,7 +139,7 @@ def test_a_shell_wrapper_and_another_interpreter_are_left_alone_too(tmp_path):
         },
     )
     hooks.install(tmp_path, command=EXECUTABLE)
-    assert commands_in(read(settings)) == [*others, EXECUTABLE]
+    assert commands_in(read(settings)) == [*others, HOOK_LINE]
 
 
 def test_a_hook_written_before_the_marker_existed_is_adopted_not_duplicated(tmp_path):
@@ -138,7 +166,7 @@ def test_a_hook_written_before_the_marker_existed_is_adopted_not_duplicated(tmp_
     )
     report = hooks.install(tmp_path, command=EXECUTABLE)
     data = read(settings)
-    assert commands_in(data) == [EXECUTABLE]
+    assert commands_in(data) == [HOOK_LINE]
     entry = data["hooks"]["SessionStart"][0]["hooks"][0]
     assert entry[hooks.MANAGED_KEY] == hooks.MARKER
     assert next(t for t in report["targets"] if t["target"] == "claude-code")["status"] == (
@@ -158,11 +186,11 @@ def test_a_second_stale_managed_entry_gives_way_not_reported_current(tmp_path):
     """
     managed = {
         "type": "command",
-        "command": EXECUTABLE,
+        "command": HOOK_LINE,
         "timeout": hooks.DEFAULT_TIMEOUT_SECONDS,
         "managed_by": "ha-axi",
     }
-    stale = {**managed, "command": "/old/bin/ha-axi"}
+    stale = {**managed, "command": f"/old/bin/ha-axi {hooks.CONTEXT_COMMAND}"}
     settings = write_settings(
         tmp_path, {"hooks": {"SessionStart": [{"matcher": "", "hooks": [managed, stale]}]}}
     )
@@ -170,14 +198,14 @@ def test_a_second_stale_managed_entry_gives_way_not_reported_current(tmp_path):
     assert next(t for t in report["targets"] if t["target"] == "claude-code")["status"] == (
         "installed"
     )
-    assert commands_in(read(settings)) == [EXECUTABLE]
+    assert commands_in(read(settings)) == [HOOK_LINE]
 
 
 def test_a_stale_entry_in_a_later_group_is_repaired_too(tmp_path):
     """Groups are scanned to the end, not only up to the one holding a managed entry."""
     managed = {
         "type": "command",
-        "command": EXECUTABLE,
+        "command": HOOK_LINE,
         "timeout": hooks.DEFAULT_TIMEOUT_SECONDS,
         "managed_by": "ha-axi",
     }
@@ -187,13 +215,18 @@ def test_a_stale_entry_in_a_later_group_is_repaired_too(tmp_path):
             "hooks": {
                 "SessionStart": [
                     {"matcher": "", "hooks": [managed]},
-                    {"matcher": "startup", "hooks": [{**managed, "command": "/old/bin/ha-axi"}]},
+                    {
+                        "matcher": "startup",
+                        "hooks": [
+                            {**managed, "command": f"/old/bin/ha-axi {hooks.CONTEXT_COMMAND}"}
+                        ],
+                    },
                 ]
             }
         },
     )
     hooks.install(tmp_path, command=EXECUTABLE)
-    assert commands_in(read(settings)) == [EXECUTABLE]
+    assert commands_in(read(settings)) == [HOOK_LINE]
 
 
 def test_other_tools_hooks_are_left_alone(tmp_path):
@@ -210,7 +243,7 @@ def test_other_tools_hooks_are_left_alone(tmp_path):
     )
     hooks.install(tmp_path, command=EXECUTABLE)
     data = read(settings)
-    assert commands_in(data) == ["other-tool", EXECUTABLE]
+    assert commands_in(data) == ["other-tool", HOOK_LINE]
     assert data["unrelated"] is True
 
 
@@ -235,7 +268,7 @@ def test_a_legacy_lowercase_hook_entry_is_cleaned_up(tmp_path):
     hooks.install(tmp_path, command=EXECUTABLE)
     data = read(settings)
     assert [hook["command"] for hook in data["hooks"]["session_start"]] == [wrapper]
-    assert commands_in(data) == [EXECUTABLE]
+    assert commands_in(data) == [HOOK_LINE]
 
 
 def test_an_unmanaged_opencode_plugin_is_never_overwritten(tmp_path):
@@ -363,30 +396,131 @@ def test_portable_command_falls_back_to_the_absolute_path(tmp_path):
     assert hooks.portable_command(str(binary), []) == str(binary)
 
 
-def test_the_opencode_plugin_carries_a_managed_marker():
+def test_the_opencode_plugin_carries_a_managed_marker_and_the_context_argument():
+    """It spawns without a shell, so the argument travels beside the path, not in it."""
     source = hooks.opencode_plugin_source(EXECUTABLE, hooks.DEFAULT_TIMEOUT_SECONDS)
     assert hooks.OPENCODE_MANAGED_PREFIX in source
-    assert '"ha-axi"' in source
+    assert f'const executable = "{EXECUTABLE}"' in source
+    assert f'const args = ["{hooks.CONTEXT_COMMAND}"]' in source
 
 
-def test_the_installed_hook_is_useful_and_leaks_nothing_with_no_credentials(run_cli, tmp_path):
-    """A hook runs at the start of every session, including where nothing is configured.
+def test_a_path_with_a_space_survives_being_joined_with_the_argument():
+    """A bare executable was one token and needed no quoting; a command line is not."""
+    line = hooks.hook_command("/opt/an example/bin/ha-axi")
+    assert shlex.split(line) == ["/opt/an example/bin/ha-axi", hooks.CONTEXT_COMMAND]
 
-    The command recorded is the no-argument home view, so what an unconfigured
-    machine gets is that view's ``NOT_CONFIGURED`` document: the two variables
-    named, no value of either, and nothing on stderr, which is the channel
-    redaction has to hold on just as hard.
 
-    The exit code is 1 and is pinned here rather than passed over. It is what the
-    error taxonomy gives every ``config`` fault, and the sibling reached exit 0 by
-    giving its hook a separate non-connecting subcommand -- a command-surface
-    change, and a decision of its own rather than part of this fix.
+def test_the_installed_hook_runs_the_context_command_not_the_home_view(tmp_path):
+    """The join between the two halves, and the defect this replaced.
+
+    The no-argument view needs a credential, opens a connection, prints the
+    installation's address and exits 1 when nothing is configured. A hook that
+    ran it failed on every machine that had the package and no installation --
+    and a harness is entitled to drop a non-zero hook's output, so the reader
+    who most needed telling that this tool exists was the one who never saw it.
     """
     report = hooks.install(tmp_path, command=EXECUTABLE)
-    assert report["command"] == EXECUTABLE
+    assert report["command"] == HOOK_LINE
+    assert report["command"] != EXECUTABLE, "a bare executable would run the home view"
+    assert commands_in(read(tmp_path / ".claude" / "settings.json")) == [HOOK_LINE]
 
-    code, out = run_cli([], {})
-    assert code == 1
-    assert "HA_URL" in out and "HA_TOKEN" in out
-    assert "NOT_CONFIGURED" in out
-    assert "Run `ha-axi doctor`" in out
+
+# -------------------------------------------------- the document it prints
+
+
+def test_the_context_command_reaches_home_assistant_zero_times(installation, run_cli):
+    """The claim that makes it safe at session start, asserted where it can fail.
+
+    Not the exit code: a version that connected and then printed the same
+    document would pass on that, while paying a round-trip and reading a
+    credential at the start of every session on the machine.
+    """
+    code, _ = run_cli(["context"], installation.environ)
+    assert code == 0
+    assert installation.rest.requests == []
+    assert installation.ws.received == []
+
+
+def test_the_context_command_is_clean_and_useful_with_no_environment_at_all(run_cli, capsys):
+    """A machine that has the package and no installation is the ordinary case.
+
+    This is the whole reason the command exists, and the half the home view
+    could not do: exit 0, no `error:` line, and still enough to orient.
+    """
+    code, out = run_cli(["context"], {})
+    assert code == 0
+    assert "error:" not in out
+    assert "NOT_CONFIGURED" not in out
+    assert capsys.readouterr().err == ""
+    for noun in cli.COMMAND_ORDER:
+        assert noun in out
+    assert "Set HA_URL" in out
+    assert "Set HA_TOKEN" in out
+
+
+def test_the_context_command_names_which_variables_are_set_and_never_their_values(
+    run_cli, rest_env, capsys
+):
+    """Hook output lands in an agent's context and is logged: a wider surface, not a narrower one."""
+    code, out = run_cli(["context"], rest_env)
+    err = capsys.readouterr().err
+    assert code == 0
+    assert "HA_URL and HA_TOKEN are set" in out
+    for leak in (rest_env["HA_URL"], rest_env["HA_TOKEN"]):
+        assert leak not in out, "the ambient document printed a value it only reports the name of"
+        assert leak not in err
+
+
+def test_the_context_command_reports_a_closed_read_only_gate(run_cli, rest_env):
+    """An agent that cannot see a closed gate plans writes it will never be allowed to make."""
+    from ha_axi.readonly import ENV_VAR
+
+    assert "read_only" not in run_cli(["context"], rest_env)[1]
+    code, out = run_cli(["context"], {**rest_env, ENV_VAR: "1"})
+    assert code == 0
+    assert "read_only: on" in out
+    assert f"unset {ENV_VAR}" in out
+
+
+def test_the_context_command_never_reports_a_fault_however_it_is_configured(run_cli):
+    """Every shape of the environment, and none of them is an error at session start."""
+    partial = [{}, {"HA_URL": "https://homeassistant.example.com"}, {"HA_TOKEN": "example-token"}]
+    for environ in partial:
+        code, out = run_cli(["context"], environ)
+        assert code == 0, environ
+        assert "code:" not in out and "class:" not in out, environ
+
+
+#: What one session's ambient context may cost. This loads on *every* session,
+#: so the budget is asserted rather than intended -- a line added without
+#: thinking about the cost fails here rather than being paid forever by
+#: everybody who installed the hook. The ceiling leaves room for one more fact,
+#: not for a manual.
+CONTEXT_BUDGET_BYTES = 2048
+
+
+@pytest.mark.parametrize("configured", [True, False])
+def test_the_ambient_document_stays_within_its_token_budget(run_cli, rest_env, configured):
+    _, out = run_cli(["context"], rest_env if configured else {})
+    size = len(out.encode("utf-8"))
+    assert size < CONTEXT_BUDGET_BYTES, f"ambient context is {size} bytes"
+
+
+def test_the_context_command_needs_no_subcommand_and_takes_no_arguments(run_cli):
+    assert run_cli(["context"], {})[0] == 0
+    assert run_cli(["context", "extra"], {})[0] == 2
+
+
+def test_the_context_document_never_pays_for_a_quoted_scalar(run_cli, rest_env):
+    """It is TOON, so a scalar holding a delimiter or a colon is quoted.
+
+    A pair of quotes on a line of prose is noise bought at the start of every
+    agent session, which is the same reason `home.DESCRIPTION` is written
+    without a comma.
+    """
+    for environ in ({}, rest_env):
+        _, out = run_cli(["context"], environ)
+        for line in out.splitlines():
+            if line.startswith(" ") or ": " not in line:
+                continue
+            assert not line.split(": ", 1)[1].startswith('"'), line

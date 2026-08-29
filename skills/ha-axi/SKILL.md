@@ -192,6 +192,18 @@ ha-axi setup skill --check
 - hooks give ambient context every session; the skill loads on demand instead -- install either
 - hook installation is idempotent and repairs the path after a reinstall or a move
 
+### `ha-axi context`
+
+Print the ambient context a session hook puts in front of an agent.
+
+```sh
+ha-axi context
+```
+
+- this is the document `ha-axi setup hooks` installs a SessionStart hook to print
+- it reads the environment and the command table only: no connection, no token, no installation address, and it exits 0 whether or not this machine has Home Assistant
+- for live state -- how many entities there are and what is unavailable -- run `ha-axi` with no arguments instead
+
 ## Rules of thumb
 
 - `entity_id` is not stable identity. Find entities by area or by search, and read

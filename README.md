@@ -374,6 +374,8 @@ what `ha-axi` is for.
   correlation and error translation are shared.
 - **`doctor`** — environment and connection checks over both transports.
 - **`setup`** — install the agent integrations on this machine (below).
+- **`context`** — the ambient document a session hook prints. Reads the environment and the
+  command table only, so it reaches nothing and exits 0 with nothing configured (below).
 
 The whole command surface, and the transport each half runs on:
 
@@ -389,6 +391,7 @@ The whole command surface, and the transport each half runs on:
 | `ha-axi api` | REST | Any authenticated REST path |
 | `ha-axi doctor` | both | Environment and connection checks |
 | `ha-axi setup` | — | Install the agent integrations |
+| `ha-axi context` | — | The ambient document a session hook prints |
 
 `--help` on any command is the authoritative reference: it lists every flag per subcommand, with
 defaults and two or three worked examples. Nothing here duplicates it, and it works with no
@@ -536,8 +539,7 @@ status and nothing more.
 
 Two ways to make this discoverable. **You only need one.**
 
-**Session hook** — ambient context in every session, with live state, for agents that support
-hooks:
+**Session hook** — ambient context in every session, for agents that support hooks:
 
 ```sh
 ha-axi setup hooks
@@ -555,8 +557,33 @@ a release before that key existed is adopted once, in the one shape those releas
 the executable and nothing else — so upgrading repairs the hook you already have rather than adding
 a second beside it.
 
-What that hook puts in front of a session is the no-argument view, which is live state rather than
-a manual — so an agent starts knowing what is actually there:
+What the hook puts in front of a session is `ha-axi context`, which reads the environment and the
+command table and nothing else — no connection, no token, no address, and exit 0 whether or not this
+machine has ever been pointed at Home Assistant:
+
+```
+$ ha-axi context
+bin: ~/.local/bin/ha-axi
+description: Agent CLI for Home Assistant. Reads and writes the entity and area registries REST cannot reach and explains a service call Home Assistant refuses. Prefer this over raw curl for Home Assistant operations.
+config: HA_URL and HA_TOKEN are set
+registries: names and areas live in the registry which only the WebSocket API serves -- `entity list` and `area list` read it; `state list` reads REST and cannot see either
+entity_ids: an entity_id is not stable identity and its words mean nothing -- reach an entity with `entity list --search '<the name a user sees>'` or `--area <id|name>` rather than guess one
+services: prefer `service call` over `api POST /services/...` -- it explains a refusal Home Assistant returns with no body at all and tells reaching nothing apart from changing nothing
+commands[11]: state,service,template,entity,area,device,ws,api,doctor,setup,context
+help[4]:
+  Run `ha-axi` for this installation at a glance: entity counts by domain and what is unavailable
+  Run `ha-axi entity list --area <id|name>` to read the registry, which REST cannot reach
+  Run `ha-axi service call <domain>.<service> --target-entity <entity_id>` to act
+  Run `ha-axi <command> --help` for its flags, or `ha-axi --help` for all of them
+```
+
+`config` reports *which* variables are set and never what they hold. On a machine that has never
+been configured the same document comes back with the two exports in its `help` block instead — and
+still exits 0, which is the point: a hook runs before anybody has decided to use the tool, so the
+one reader who most needs telling that this tool exists is the one with nothing set up yet.
+
+The no-argument view is still where live state lives, and it is worth running once configuration is
+in place:
 
 ```
 $ ha-axi
@@ -583,9 +610,11 @@ help[5]:
   Run `ha-axi service call <domain>.<service> --target-entity <entity_id>` to act
 ```
 
-The `url` line reports whatever `HA_URL` resolved to, with any `user:password@` stripped; it reads
-as the documentation placeholder here because every example in this file was run against a
-throwaway Home Assistant, and that is the one line whose value is the reader's own.
+It needs both variables, opens a connection and prints the installation's address, which is why it
+is not what a hook runs: as ambient context it would fail on every machine that had the package and
+no installation, and put an address into an agent's context on every machine that had one. The
+`url` line reads as the documentation placeholder here because every example in this file was run
+against a throwaway Home Assistant, and that is the one line whose value is the reader's own.
 
 `unavailable` and `unknown` are counted apart because they are different facts: `unknown` means
 reachable and not yet reporting, which is much the commoner of the two, and summing them under the

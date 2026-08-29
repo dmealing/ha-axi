@@ -129,6 +129,10 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   `commands/service.py` under the local alias `model`. No I/O and no cache: the caller fetches,
   and decides whether the answer is worth the round-trip. It is **not in this repository**; see
   "The service model is a dependency now" below.
+- `commands/context.py` — the ambient document a session hook prints, and the only command whose
+  contract is *when* it runs rather than what it answers. It reaches no transport and reads no
+  credential, so it cannot fail; `hooks.py` is its only intended caller and a human running it is
+  reading what their agents were told. See "The session-hook installer" below.
 - `errors.py` — the error types, the eight fault classes, and `CODES`: the closed vocabulary of
   every code this tool can print, each mapped to its class. It imports nothing at all, so every
   other module can depend on it. See "The error taxonomy" below; the short version is that the class
@@ -668,15 +672,35 @@ edit at all — a key beside an array of tables lands inside one element and ena
 refusal and `_install_codex_features` reports `skipped` with the file byte-identical. A target that
 only looks installed is the failure this whole section is about.
 
-**The hook runs the bare executable, which is this tool's answer and not the sibling's.** There the
-hook runs a dedicated non-connecting subcommand, because that tool's no-argument view needs a
-credential, opens a connection and prints the server's address. Here the no-argument home view *is*
-what the hook prints, and the README documents it that way. One consequence is worth knowing before
-anybody calls it a bug: with no `HA_URL`/`HA_TOKEN` the view prints its `NOT_CONFIGURED` document —
-useful, and leaking neither value — and exits **1**, because that is what the error taxonomy gives
-every `config` fault. `test_the_installed_hook_is_useful_and_leaks_nothing_with_no_credentials` pins
-all of it, exit code included. Changing that means choosing between contradicting the taxonomy and
-adding a subcommand, which is a decision of its own and not a defect fix.
+**The hook runs `ha-axi context`, never the bare executable, and the reason is an exit code.** The
+no-argument home view is live state: it needs a credential, opens a connection, prints the
+installation's address, and reports `NOT_CONFIGURED` with exit **1** when nothing is set. That is
+the right answer to "show me this installation" and the wrong thing to run at session start, because
+it fails for exactly the machine ambient context exists to reach — the one that has the package and
+has never been pointed at Home Assistant — and a harness is entitled to drop a non-zero hook's
+output rather than put it in front of the agent. It also pays a round-trip and prints an address on
+every session, into a channel that is logged and transcribed.
+
+**The taxonomy did not move, and that is the whole shape of the fix.** `ha-axi` with nothing
+configured still reports `NOT_CONFIGURED` and still exits 1, because a caller who asked for live
+state and cannot have it *has* met a `config` fault. `context` asks a different question — describe
+this installation without connecting to it — so it gets a different answer rather than a softened
+one. Softening the home view would have made every script and every `doctor`-as-a-gate downstream
+stop being able to tell configured from not. Only the hook path changed.
+
+**What `context` may cost, and what it may say.** It loads on every session, so
+`CONTEXT_BUDGET_BYTES` in `tests/test_hooks.py` asserts the ceiling rather than intending it: a line
+added without thinking about the cost fails there instead of being paid forever by everybody who
+installed the hook. Two content rules fall out of the same place it is printed. It reports *which*
+variables are set and never what they hold, because hook output is a wider surface than a terminal
+rather than a narrower one. And every scalar in it is written without a colon, a comma or a bracket
+— the document is TOON, which quotes a scalar holding any of those, and a pair of quotes on a line
+of prose is noise bought at the start of every session; this is the same rule `home.DESCRIPTION` is
+held to, and `test_the_context_document_never_pays_for_a_quoted_scalar` is what keeps it.
+
+**The two views are not redundant and the split is the point.** `context` is what an agent is *told*
+at session start, from the environment alone; the home view is what an agent *asks* once it has a
+reason to. A fact that needs a connection belongs in the home view and nowhere near this one.
 
 ## The command contract
 
@@ -732,8 +756,10 @@ own change with its own argument.
 not inferable; see "The read-only gate" above.
 
 **Demotion, and the standing cap.** If a typed command's body reduces to flag-mapping plus a
-request, delete it — the measure is the diff, not the intention. Ten nouns fit in a root help block
-an agent reads in one glance; an eleventh has to argue that it earns its line. `--data key=value`
+request, delete it — the measure is the diff, not the intention. Eleven nouns fit in a root help
+block an agent reads in one glance; a twelfth has to argue that it earns its line. `context` earned
+its own by being the thing a hook can safely run, which no existing noun was — see "The session-hook
+installer". `--data key=value`
 stays first-class in every case, because it reaches every field of every service forever with no
 metadata to go stale.
 

@@ -519,7 +519,7 @@ INVOCATIONS = {
 #: The subcommands that never reach Home Assistant. Named rather than inferred,
 #: and asserted below, so "it does not touch a transport" has to be a claim
 #: somebody made rather than a gap nobody noticed.
-LOCAL_ONLY = {("setup", "hooks"), ("setup", "skill")}
+LOCAL_ONLY = {("setup", "hooks"), ("setup", "skill"), ("context", "context")}
 
 CLI_SUBCOMMANDS = [
     (name, sub.name) for name, module in sorted(cli._MODULES.items()) for sub in module.COMMAND.subs
