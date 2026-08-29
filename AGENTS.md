@@ -1099,8 +1099,11 @@ yields zero footers by the same measurement — so the squash message has to be 
 commit's message verbatim, footer last, and the pull request body has to say so, because the
 pipeline's own document step routinely adds a second commit. A release lost either way gives a green
 run, no release and no error anywhere: the same silent class as an unparseable message, reached from
-the other side. `scripts/commitcheck.py --message` runs the real parser, so whether a given wording
-survives is checkable in a second.
+the other side. `scripts/commitcheck.py --message` cannot be the guard here: it answers only whether
+the message parses at all, and both loss modes above are perfectly parseable, so it exits 0 on
+each of them — a false assurance, which is worse than no check. Whether a footer survives is only
+measurable by driving the parser in `vendor/conventional-commits-parser/` and counting the footer
+nodes it returns.
 
 **A commit message release-please cannot parse is dropped silently, and the run stays green.**
 `parseConventionalCommits` wraps every parse in `try { … } catch { logger.debug(…) }`, so an
