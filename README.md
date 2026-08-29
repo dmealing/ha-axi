@@ -221,8 +221,8 @@ help[2]:
 publishes enough metadata to generate a typed command per service, and generating them would mean
 roughly 77 nouns and 327 subcommands wrapping the one command that already reaches all of them —
 each firing at a device without asking whether it can do the thing. Consuming the model to
-*validate, explain and recover* costs one file and none of that. `--data key=value` reaches every
-field of every service, forever, with no metadata to go stale.
+*validate, explain and recover* costs one shared dependency and none of that. `--data key=value`
+reaches every field of every service, forever, with no metadata to go stale.
 
 ## Install
 
