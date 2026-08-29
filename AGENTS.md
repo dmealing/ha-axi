@@ -115,7 +115,7 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   render one suggestion per line, matching the AXI standard and the sibling AXI CLIs, because the
   suggestions are command lines full of commas. Data structures stay strict TOON.
 - `rest.py` — REST over the standard library. `ws.py` — WebSocket over `websockets`' sync client,
-  the only runtime dependency.
+  the only runtime dependency that carries a transport.
 - `argspec.py` — per-subcommand flag declarations. Unknown flags are rejected by name with the
   valid ones inlined; `RENAMED` maps plausible wrong guesses to the real flag.
 - `commands/` — one module per noun, each exposing `COMMAND` and `run(ctx, sub, parsed)`, and
@@ -125,8 +125,10 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   help, `SKILL.md` and the parametrised test sweeps all derive from those. A `pkgutil` scan would save
   the two lines, cost static analysis, and still need an explicit order — it has been costed and
   is not worth it.
-- `servicemodel.py` — a pure reader for what `GET /api/services` publishes. No I/O and no cache:
-  the caller fetches, and decides whether the answer is worth the round-trip.
+- `axi_toolkit.ha.services` — a pure reader for what `GET /api/services` publishes, imported by
+  `commands/service.py` under the local alias `model`. No I/O and no cache: the caller fetches,
+  and decides whether the answer is worth the round-trip. It is **not in this repository**; see
+  "The service model is a dependency now" below.
 - `errors.py` — the error types, the eight fault classes, and `CODES`: the closed vocabulary of
   every code this tool can print, each mapped to its class. It imports nothing at all, so every
   other module can depend on it. See "The error taxonomy" below; the short version is that the class
@@ -134,6 +136,37 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
 - `readonly.py` — the `HA_AXI_READ_ONLY` gate: the classification vocabulary, the switch reader,
   the refusal, and the one `guard()` all three enforcement points call. It imports nothing but
   `errors`, so `config`, `rest`, `ws` and `cli` can all depend on it without a cycle.
+
+### The service model is a dependency now
+
+`servicemodel.py` was moved to `axi_toolkit.ha.services` — whole, with a single edit: one docstring
+sentence cited this file by name and would have dangled in the other repository. Everything below
+that docstring is byte-for-byte what this repository used to carry. `commands/service.py` imports it
+under the same local alias, `model`, which is why the swap is one line and nothing else in that file
+moved: all nineteen names reached through that alias resolve on the new module, and that was checked
+rather than assumed.
+
+**Why a package rather than two copies.** The two AXI CLIs measured 1,378 identical lines of toolkit
+between them, and the duplication had already cost a TOON specification fix that landed in one copy
+and not the other — invisibly, until somebody ran both encoders against the same fixtures. The
+reader is the first module of the Home Assistant tier to move. Its own tests moved with it: the four
+cases in `tests/test_service_model.py` that addressed the module rather than the command path are
+stated there now and are deliberately not restored here, because two copies of one test is the same
+divergence one layer up. The ~600 lines that drive `service call` and `service get` against the REST
+double are this repository's own and stay — they are the evidence that the swap changed no
+behaviour, and the capability rule that matters most to this tool is still exercised end to end by
+`test_a_service_with_an_upstream_fallback_is_not_gated`.
+
+**The floor is `>=0.3.0` because that is the first release containing the module.** It is a floor
+and not a pin, so the command-path suite is what checks the reader still reads the way this tool
+needs it to.
+
+**Two direct dependencies, one added to the installed closure, and that is measured rather than
+asserted.** `axi-toolkit` declares no runtime dependency of its own — its `ha` extra is empty,
+because what the reader needs is `difflib` — and its own purity tests are what keep that true. A
+clean-environment install of the built wheel arrives with exactly `axi-toolkit` and `websockets`.
+Re-measure when the floor moves; a transitive dependency appearing there is a reason to reconsider
+this dependency, not something to absorb quietly.
 
 ### Security invariants — do not regress these
 
@@ -278,7 +311,8 @@ that are neither JWT-shaped nor bearer-prefixed, and anything inside a binary.
   disjunction is how an upstream fallback is encoded: `media_player.volume_up` publishes VOLUME_SET
   *and* VOLUME_STEP because core backs a player that cannot step with one that can set. Reading the
   list as a conjunction would gate exactly the behaviour that works today, which is the A11 caveat
-  in the maintainer's tool-design guide. `servicemodel.satisfies` is that rule and nothing else.
+  in the maintainer's tool-design guide. `axi_toolkit.ha.services.satisfies` is that rule and
+  nothing else.
 - **A capability requirement is only read for the service's own domain.** `reolink.ptz_move`
   targets `button` entities and names a `camera` feature; checking a button against a camera's bits
   would refuse every call. `feature_masks` returns nothing unless the published entity filter names
@@ -562,7 +596,7 @@ reason `--no-check` exists.
 subcommands where there are 10 and 19, roughly 30× the `--help` budget, `light turn_on` colliding
 with `service call light.turn_on` for every service, and 19 flags on one subcommand of which 17 are
 conditional on capabilities nothing checks. Consuming the same model to *validate, explain and
-recover* has none of those costs and is what `servicemodel.py` is for.
+recover* has none of those costs and is what `axi_toolkit.ha.services` is for.
 
 **The promotion rule.** A service becomes a typed command only when the command would do something
 `service call` cannot — and that something must be named in the PR. In the order to check it:
@@ -715,7 +749,9 @@ green suite. Two rules follow, and neither is optional:
   and skips one lacking a published capability — which is what makes "nothing to do" and "nothing
   targeted" two testable worlds rather than one string. `SERVICES`, `capability_masks`,
   `target_domains` and `entities_targeted` in `tests/conftest.py` are that second opinion and are
-  deliberately not imported from `ha_axi.servicemodel`.
+  deliberately not imported from `axi_toolkit.ha.services`, the reader the client uses. That the
+  reader ships in a shared package rather than in `ha_axi` does not soften the rule: it is still
+  the client's reading, and a second opinion is only one if it was arrived at independently.
 - **Not every refusal is a `400`, and two of them carry nothing.** A `HomeAssistantError` is not
   caught anywhere, so aiohttp renders it as a plain-text `500` with a fixed apology and no message:
   that is what a named entity lacking a capability gets (`ServiceNotSupported`), and what a

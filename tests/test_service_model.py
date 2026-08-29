@@ -17,6 +17,16 @@ that sent without ever consulting the model Home Assistant publishes at
 The REST double models the refusals rather than the successes, so every case
 below fails the way a real instance would: an unknown service and a rejected
 field both come back as an empty 400, because that is all Home Assistant sends.
+
+**The model reader itself is no longer in this repository.** `service call` and
+`service get` read `axi_toolkit.ha.services`, which is the old `servicemodel.py`
+moved whole. Four cases here stated that module's own rules directly -- the two
+capability rules and the empty readings of `target_domains` -- and they went
+across with the code, unchanged apart from the module's name. They are not
+restored here: two copies of one test is the divergence the shared package
+exists to end, and the rule that matters most to this tool is exercised end to
+end below anyway, by `test_a_service_with_an_upstream_fallback_is_not_gated`.
+Everything in this file drives the command path, which is this repository's own.
 """
 
 from __future__ import annotations
@@ -404,53 +414,6 @@ def test_a_name_too_far_off_gets_a_listing_rather_than_a_wrong_guess(run_cli, re
     assert code == 1
     assert "did you mean" not in out
     assert "ha-axi service list --domain light" in out
-
-
-# ------------------------------------------------------- the model reader
-
-
-def test_feature_masks_are_read_only_for_the_service_own_domain():
-    """An integration acting on another domain's entities publishes that domain's names.
-
-    `reolink.ptz_move` targets `button` entities and names a `camera` feature.
-    Checking a button against a camera's bits would refuse every call.
-    """
-    from ha_axi import servicemodel
-
-    same = {"target": {"entity": [{"domain": ["media_player"], "supported_features": [8]}]}}
-    assert servicemodel.feature_masks(same, "media_player") == [8]
-    assert servicemodel.feature_masks(same, "reolink") == []
-
-    cross = {"target": {"entity": [{"domain": ["button"], "supported_features": [512]}]}}
-    assert servicemodel.feature_masks(cross, "reolink") == []
-
-
-def test_a_capability_that_did_not_resolve_to_a_number_disables_the_gate():
-    """Home Assistant resolves the enum names before publishing; anything else is unknown."""
-    from ha_axi import servicemodel
-
-    spec = {"target": {"entity": [{"domain": ["fan"], "supported_features": ["fan.SET_SPEED"]}]}}
-    assert servicemodel.feature_masks(spec, "fan") == []
-
-
-def test_satisfies_treats_the_mask_list_as_alternatives_and_each_mask_as_a_whole():
-    """Home Assistant's own rule: any one mask, but every bit of that one."""
-    from ha_axi import servicemodel
-
-    assert servicemodel.satisfies(0b0010, [0b0010, 0b0100]) is True
-    assert servicemodel.satisfies(0b0001, [0b0010, 0b0100]) is False
-    # A mask of two bits is a conjunction: half of it is not enough.
-    assert servicemodel.satisfies(0b0010, [0b0110]) is False
-    assert servicemodel.satisfies(0b0110, [0b0110]) is True
-    assert servicemodel.satisfies(0, []) is True
-
-
-def test_target_domains_is_empty_when_the_service_publishes_no_restriction():
-    from ha_axi import servicemodel
-
-    assert servicemodel.target_domains({}) == []
-    assert servicemodel.target_domains({"target": {"entity": [{}]}}) == []
-    assert servicemodel.target_domains({"target": {"entity": [{"domain": "light"}]}}) == ["light"]
 
 
 def test_a_response_call_that_reached_nothing_gets_the_same_answer_as_one_that_did_not(
