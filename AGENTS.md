@@ -1070,6 +1070,38 @@ taught still holds: never "fix" a mismatch by raising the baseline to match the 
 release-please the version is already out and it bumps past it, permanently skipping a version
 number PyPI will never let us reuse.
 
+**A correctly typed commit can still cut no release at all, and that is the changelog sections
+working as intended.** `feat`, `fix` and a breaking change are the only types that move the version;
+a `build`, `ci`, `chore`, `docs`, `refactor` or `test` commit is parsed, counted and then bumps
+nothing, so the release workflow reports success while shipping nothing and logs that it considered
+zero commits — which reads exactly like a clean run with nothing left to do. That is right for
+almost everything, and wrong for the one case where a merged change alters what a contributor or a
+user gets while having no behaviour to describe. The lever is a `Release-As: <version>` footer, on a
+commit of its own.
+
+**No version string is touched by hand in that commit: release-please owns every one of them.**
+`pyproject.toml`, `src/ha_axi/__init__.py` and `.release-please-manifest.json` are all written by
+the release pull request release-please opens once the footer has forced it, and hand-bumping any of
+them there is how the manifest comes to be raised to a version PyPI has never seen — the mistake the
+paragraph above exists to prevent. The forcing commit is prose plus the footer and nothing else, and
+typing it `docs` rather than `chore` is deliberate: `Documentation` is a section release-please
+prints, so the release gets a real entry instead of a bare header. That entry describes the *forcing
+commit*, though, never the hidden-type change that prompted the release — which is still invisible —
+so the wording that says what actually shipped is a separate edit on release-please's own release
+branch. 0.7.1 was cut this way, from a `build` commit.
+
+**The footer has to survive the squash, and both ways of losing it are silent.** Run through
+`vendor/conventional-commits-parser/`, a message whose `Release-As` line is followed by prose parses
+with **no footers at all** — the whole footer block is re-read as body, so the version is never
+seen. Another *footer* after it is harmless; a sentence is not. And GitHub's own default squash
+message for a branch carrying more than one commit is the title plus a list of the commits, which
+yields zero footers by the same measurement — so the squash message has to be set to the branch
+commit's message verbatim, footer last, and the pull request body has to say so, because the
+pipeline's own document step routinely adds a second commit. A release lost either way gives a green
+run, no release and no error anywhere: the same silent class as an unparseable message, reached from
+the other side. `scripts/commitcheck.py --message` runs the real parser, so whether a given wording
+survives is checkable in a second.
+
 **A commit message release-please cannot parse is dropped silently, and the run stays green.**
 `parseConventionalCommits` wraps every parse in `try { … } catch { logger.debug(…) }`, so an
 unreadable message costs a commit and reports nothing: no changelog entry, no version bump, and a
