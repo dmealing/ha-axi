@@ -496,6 +496,8 @@ INVOCATIONS = {
     ("area", "create"): ["area", "create", "--name", "Example Room Two"],
     ("area", "update"): ["area", "update", "example_room", "--name", "Renamed"],
     ("device", "list"): ["device", "list"],
+    ("device", "get"): ["device", "get", "device_two"],
+    ("device", "update"): ["device", "update", "device_two", "--name", "Renamed"],
     ("doctor", "doctor"): ["doctor"],
     ("entity", "list"): ["entity", "list"],
     ("entity", "get"): ["entity", "get", "light.example_ceiling"],

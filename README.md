@@ -119,9 +119,20 @@ reports the icon, floor and aliases that `area list` leaves out.
 
 The typed write surface is `entity update` — `--name`, `--area` and `--icon`, each with a matching
 `--clear-*` that falls back to what the integration supplies, plus `--new-id` to rename the
-`entity_id` itself — together with `area create` and `area update`. Deleting an area is deliberately
-not given a typed command; `ha-axi ws area.delete` is there if you mean it. `device list` reads the
-device registry, and `ha-axi ws device.update` writes it.
+`entity_id` itself — together with `area create` and `area update`, and `device get` and
+`device update` on the registry behind them. Deleting an area is deliberately not given a typed
+command; `ha-axi ws area.delete` is there if you mean it, and the same goes for disabling or
+deleting a device.
+
+**The device is usually the level a name or an area is wrong at**, which is why `device update`
+exists rather than a loop over entities: an entity with no area of its own inherits its device's,
+and an entity with no name of its own is named after its device, so one correction here moves every
+entity that device supplies and leaves nothing behind still saying the old thing. It takes a
+`device_id` or the displayed name, and `--name`/`--area` with matching `--clear-*` flags, the same
+shape `entity update` has. One asymmetry is Home Assistant's rather than this tool's: a device
+carries two names, and only `name_by_user` is writable. `--name` sets it, `--clear-name` removes it
+and falls back to the integration's own `name`, and `device get` reports both alongside a
+`name_source` saying which one is showing.
 
 ## Service calls that are checked, not forwarded
 
@@ -383,7 +394,7 @@ The whole command surface, and the transport each half runs on:
 | --- | --- | --- |
 | `ha-axi entity list\|get\|update` | WebSocket | The entity registry: names, areas, platforms, entity ids |
 | `ha-axi area list\|get\|create\|update` | WebSocket | The area registry |
-| `ha-axi device list` | WebSocket | The device registry |
+| `ha-axi device list\|get\|update` | WebSocket | The device registry: device names and areas, which entities inherit |
 | `ha-axi service list\|get\|call` | REST | Discover services, read one's fields, and call them |
 | `ha-axi state list\|get` | REST | Entity states and attributes as they are right now |
 | `ha-axi template render` | REST | Render a Jinja template server-side |
@@ -512,8 +523,8 @@ The whole vocabulary, which is closed:
 - `auth` — `UNAUTHORIZED`
 - `permission` — `FORBIDDEN`
 - `not_found` — `NOT_FOUND`, `NO_SUCH_ENTITY`, `NO_SUCH_AREA`, `AMBIGUOUS_AREA`, `NO_SUCH_DEVICE`,
-  `NO_SUCH_DOMAIN`, `NO_SUCH_SERVICE`, `NO_ENTITIES_TARGETED`, `NO_SUCH_WS_COMMAND`,
-  `NO_WEBSOCKET_API`
+  `AMBIGUOUS_DEVICE`, `NO_SUCH_DOMAIN`, `NO_SUCH_SERVICE`, `NO_ENTITIES_TARGETED`,
+  `NO_SUCH_WS_COMMAND`, `NO_WEBSOCKET_API`
 - `refused` — `BAD_REQUEST`, `METHOD_NOT_ALLOWED`, `SERVER_ERROR`, `API_ERROR`, `INVALID_FORMAT`,
   `NOT_ALLOWED`, `NOT_SUPPORTED`, `HOME_ASSISTANT_ERROR`, `SERVICE_VALIDATION_ERROR`,
   `TEMPLATE_ERROR`, `UNKNOWN_SERVICE_FIELD`, `MISSING_SERVICE_FIELD`, `UNSUPPORTED_CAPABILITY`,
@@ -564,7 +575,7 @@ machine has ever been pointed at Home Assistant:
 ```
 $ ha-axi context
 bin: ~/.local/bin/ha-axi
-description: Agent CLI for Home Assistant. Reads and writes the entity and area registries REST cannot reach and explains a service call Home Assistant refuses. Prefer this over raw curl for Home Assistant operations.
+description: Agent CLI for Home Assistant. Reads and writes the registries REST cannot reach and explains a service call Home Assistant refuses. Prefer this over raw curl for Home Assistant operations.
 config: HA_URL and HA_TOKEN are set
 registries: names and areas live in the registry which only the WebSocket API serves -- `entity list` and `area list` read it; `state list` reads REST and cannot see either
 entity_ids: an entity_id is not stable identity and its words mean nothing -- reach an entity with `entity list --search '<the name a user sees>'` or `--area <id|name>` rather than guess one
@@ -588,7 +599,7 @@ in place:
 ```
 $ ha-axi
 bin: ~/.local/bin/ha-axi
-description: Agent CLI for Home Assistant. Reads and writes the entity and area registries REST cannot reach and explains a service call Home Assistant refuses. Prefer this over raw curl for Home Assistant operations.
+description: Agent CLI for Home Assistant. Reads and writes the registries REST cannot reach and explains a service call Home Assistant refuses. Prefer this over raw curl for Home Assistant operations.
 url: https://homeassistant.example.com
 entities: 23 in 12 domains
 unavailable: 0

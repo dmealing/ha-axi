@@ -275,6 +275,28 @@ this dependency, not something to absorb quietly.
   reached nothing suggested `entity list --search <device_id>`, which answered
   `0 registry entries found` every time it was run. Suggestions have to be runnable; that one was
   checkable with no server at all.
+- **There are two device resolvers and the split is the flag's contract, not an oversight.**
+  `resolve_device` takes an id and nothing else, because `entity list --device` is declared
+  `<device_id>` and substring-matching an opaque hex id is the accident above. `resolve_device_ref`
+  is the `<id|name>` form the `device` command's own `get` and `update` take: id first — so a device
+  whose displayed name happens to be another device's id cannot shadow it — then the **displayed**
+  name, `name_by_user` over `name`, because the integration's own name for a device somebody renamed
+  is a name nothing shows. Two devices sharing a displayed name is `AMBIGUOUS_DEVICE`, exit 1, for
+  the same reason it is on an area.
+- **A device has two names and only one of them is writable, and the flag has to say so.**
+  `config/device_registry/update` accepts `name_by_user` and not `name`: the integration owns `name`
+  and nothing can change it. So `device update --name` writes the override, `--clear-name` falls
+  back to the integration's name rather than to blank, and `device get` reports `name`,
+  `name_by_user` and a `name_source` naming which of the two is showing. `displayed_device_name` in
+  `_common.py` is the one site of the `name_by_user or name` precedence — `device_name_map` is built
+  on it, so entity name composition and every device row read the same rule.
+- **A `default_sub` must not swallow a mistyped subcommand name.** `device` is the only command with
+  a default sub *and* others, which is the shape where the hazard exists: `ha-axi device updat X`
+  used to fall through to `list` and report `unexpected argument 'updat' for \`device list\``, naming
+  a subcommand nobody typed and sending the reader after an argument mistake instead of a spelling
+  one. `cli._pick_sub` hands the default sub a bare leading token only when the default sub declares
+  a positional to hold it (`ws <command>`, `api <path>`) or when the command has no other sub;
+  otherwise it is `UNKNOWN_SUBCOMMAND`. `ha-axi device` and `ha-axi device --fields …` are untouched.
 - **Adding a WebSocket command** is one entry in `REGISTRY` in `src/ha_axi/ws.py`. It becomes
   reachable through `ha-axi ws <name>` immediately; a typed subcommand is optional on top.
 - **`--json` is the global output mode.** Command flags carrying JSON payloads are named
