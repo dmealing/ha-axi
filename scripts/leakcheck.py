@@ -308,9 +308,13 @@ class Finding:
 
     @property
     def key(self):
-        # Keyed on the matched value, not the excerpt: the same secret seen by
-        # the line pass and the condensed pass has different surroundings but
-        # is one leak, and reporting it twice buries the signal.
+        # Keyed on the matched value, not the excerpt: the ledger the line pass
+        # and the condensed pass share, so the same secret seen by both -- with
+        # different surroundings, maybe split across lines the line pass could
+        # not read -- is one leak and not two. It deliberately does not dedupe
+        # across lines: the same value on two lines is two places to fix, and
+        # the pull request report prints no excerpt, so a withheld second line
+        # is a finding that resurfaces one CI run later.
         return (self.path, self.rule.name, self.matched)
 
 
@@ -367,7 +371,16 @@ def scan_text(path, text, *, markers=True, trailers=False):
     rule added later covers all three without anyone remembering to wire it up.
     """
     findings = []
+    #: The cross-pass ledger: a value the line pass reported is one leak, and
+    #: the condensed pass checks itself against this so it does not report the
+    #: same secret again from a view with different surroundings.
     seen = set()
+    #: Repeats within one line. The same value twice on one line is still one
+    #: finding, but the same value on two lines is two places to fix and both
+    #: must be named: the pull request report has no excerpt, so a line number
+    #: is the whole locator, and a withheld second line becomes a fresh red run
+    #: the moment the first is fixed.
+    on_this_line = set()
     by_path = path_allowances(path)
 
     for number, line in enumerate(text.splitlines(), start=1):
@@ -386,9 +399,12 @@ def scan_text(path, text, *, markers=True, trailers=False):
                         pass_name="line" if viewed == 0 else "decoded",
                         column=match.start() + 1 if viewed == 0 else None,
                     )
-                    if finding.key not in seen:
-                        seen.add(finding.key)
-                        findings.append(finding)
+                    place = (*finding.key, number)
+                    if place in on_this_line:
+                        continue
+                    on_this_line.add(place)
+                    seen.add(finding.key)
+                    findings.append(finding)
 
     findings.extend(_scan_condensed(path, text, seen, by_path, markers=markers, trailers=trailers))
     findings.sort(key=lambda f: (f.line_number, f.rule.name))
