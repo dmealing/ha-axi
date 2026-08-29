@@ -584,8 +584,11 @@ DEVICE_REGISTRY = [
 #
 # These helpers are what the REST double consults to decide whether to refuse a
 # service call. They read `SERVICES` and the registries directly and share no
-# code with `ha_axi.servicemodel`: a double that took its reading of the model
-# from the client could only ever prove the client agrees with itself.
+# code with `axi_toolkit.ha.services`, the reader the client uses: a double that
+# took its reading of the model from the client could only ever prove the client
+# agrees with itself. That the reader now ships in a shared package rather than
+# in `ha_axi` changes nothing here -- it is still the client's reading, and the
+# point of the second opinion is that it is arrived at independently.
 
 
 def service_description(domain: str, service: str):

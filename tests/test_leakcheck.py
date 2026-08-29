@@ -129,6 +129,11 @@ def test_a_finding_is_reported_once_even_when_both_passes_see_it():
     assert len(findings) == 1
 
 
+def test_a_leak_twice_on_one_line_is_still_one_finding():
+    doubled = f'repo = "{HOME}/a" and "{HOME}/b"\n'
+    assert rule_names(leakcheck.scan_text("f.txt", doubled)) == ["home-path"]
+
+
 # ----------------------------------------------------------- allow marker
 
 
@@ -417,6 +422,11 @@ LEAKY_BODY = (
 )
 LEAKY_TITLE = "fix(ci): run the suite from " + HOME + "/checkout"
 
+#: The third arrival, rebuilt the same way: not pytest output this time but a
+#: driver script pasted as evidence, with the same home directory on two of its
+#: lines -- one leak, two places to fix.
+DRIVER_BODY = f'## Evidence\n\nREPO = "{HOME}/worktrees/run"\nOUT = "{HOME}/evidence/run/t.txt"\n'
+
 #: An ordinary pull request: prose, a code fence, repository-relative paths, a
 #: documentation host, an attribution trailer. A guard that fires on this is one
 #: people learn to route around, which is the failure mode that ends guards.
@@ -471,6 +481,18 @@ def test_the_pull_request_body_that_shipped_today_is_caught():
     assert finding.path == "pull request body"
     assert LEAKY_BODY.splitlines()[finding.line_number - 1].startswith("rootdir:")
     assert finding.column is not None
+
+
+def test_the_same_leak_on_two_lines_is_reported_on_both():
+    """A driver script pasted as evidence carried the same home directory on two
+    of its lines, and the report named only the first: fixing that line made the
+    next run fail on the second, a finding the first run had already seen and
+    stayed silent about. The pull request report prints no excerpt, so a line
+    number is the whole locator -- every line the value sits on must be named."""
+    findings = leakcheck.scan_pull_request((("title", "fix: a subject"), ("body", DRIVER_BODY)))
+    assert [finding.rule.name for finding in findings] == ["home-path", "home-path"]
+    assert [finding.line_number for finding in findings] == [3, 4]
+    assert all(finding.column is not None for finding in findings)
 
 
 def test_a_leak_in_the_title_is_caught_too():
@@ -553,6 +575,18 @@ def test_the_report_says_where_without_republishing_it(monkeypatch, capsys):
     assert "field,line,offset,rule,pass" in out
     assert "title,1," in out and "body,8," in out
     assert "example/repo#7" in out
+
+
+def test_the_report_names_every_line_a_repeated_leak_is_on(monkeypatch, capsys):
+    """The report is the public CI log the operator reads to fix the body, and
+    it never prints the matched text: the line numbers it lists are the only
+    places to look. A second occurrence withheld from it is a second red run
+    nobody could have seen coming."""
+    _transport(monkeypatch, data={"title": "fix: a subject", "body": DRIVER_BODY})
+    assert leakcheck.main(["--pull-request", "7"]) == 1
+    out = capsys.readouterr().out
+    assert "body,3," in out and "body,4," in out
+    assert HOME not in out
 
 
 def test_a_clean_pull_request_exits_zero(monkeypatch, capsys):

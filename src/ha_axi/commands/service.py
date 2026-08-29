@@ -12,7 +12,8 @@ drop on the floor.
 
 from __future__ import annotations
 
-from .. import servicemodel as model
+from axi_toolkit.ha import services as model
+
 from ..argspec import Command, Flag, Sub
 from ..errors import ApiError, AxiError, NotFound, UsageError
 from ..output import HelpBlock, truncate
