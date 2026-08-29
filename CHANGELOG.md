@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/dmealing/ha-axi/compare/v0.5.1...v0.6.0) (2026-08-29)
+
+
+### Features
+
+* **context:** give the session hook a document it can print with nothing configured ([#27](https://github.com/dmealing/ha-axi/issues/27)) ([da22501](https://github.com/dmealing/ha-axi/commit/da225015a116c7a4e4e9c296620c9ad2791aea8d))
+
 ## [0.5.1](https://github.com/dmealing/ha-axi/compare/v0.5.0...v0.5.1) (2026-08-29)
 
 
